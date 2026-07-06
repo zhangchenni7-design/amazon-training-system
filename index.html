@@ -436,6 +436,8 @@
     }
 
     function renderLogin(message = "") {
+      const lastUsername = localStorage.getItem("apollo-db-last-username") || "";
+      const lastPassword = localStorage.getItem("apollo-db-last-password") || "";
       root.innerHTML = `
         <section class="login-shell">
           <div class="login-brand">
@@ -446,7 +448,7 @@
           </div>
           <div class="login-card">
             <h2>登录系统</h2>
-            <p class="muted">主账号默认：主账号 / Apollo2026。第一次使用请先初始化主账号。</p>
+            <p class="muted">请输入自己的账号和密码。系统会在这台电脑上记住上一次登录信息，方便下次进入。</p>
             ${configured() ? "" : `
               <div class="notice">
                 数据库还没有配置。请先打开本文件，把 <b>SUPABASE_URL</b> 和 <b>SUPABASE_ANON_KEY</b> 换成你的 Supabase 信息。
@@ -454,11 +456,11 @@
             `}
             <div class="field">
               <label>账号</label>
-              <input id="loginUsername" value="主账号" />
+              <input id="loginUsername" value="${escapeHtml(lastUsername)}" placeholder="请输入账号" />
             </div>
             <div class="field">
               <label>密码</label>
-              <input id="loginPassword" type="password" value="Apollo2026" />
+              <input id="loginPassword" type="password" value="${escapeHtml(lastPassword)}" placeholder="请输入密码" />
             </div>
             <div class="toolbar">
               <button class="btn orange" onclick="login()">登录</button>
@@ -542,6 +544,8 @@
         }
         state.account = data;
         sessionStorage.setItem("apollo-db-account", JSON.stringify(data));
+        localStorage.setItem("apollo-db-last-username", username);
+        localStorage.setItem("apollo-db-last-password", password);
         await ensureExamConfigs();
         renderApp();
       } catch (error) {
