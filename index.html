@@ -221,8 +221,40 @@
     .table th, .table td { border-bottom: 1px solid var(--line); padding: 12px 8px; text-align: left; vertical-align: top; }
     .table th { color: var(--muted); font-size: 12px; }
     .toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 12px 0 18px; }
-    .course-card { cursor: pointer; transition: .18s ease; }
-    .course-card:hover { transform: translateY(-2px); border-color: rgba(255,138,52,.45); }
+    .course-card {
+      cursor: pointer;
+      transition: .18s ease;
+      position: relative;
+      overflow: hidden;
+    }
+    .course-card::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 7px;
+      background: var(--orange);
+    }
+    .course-card.l0 {
+      background: linear-gradient(135deg, rgba(255, 241, 230, .96), #fff 58%);
+      border-color: rgba(255, 138, 52, .24);
+    }
+    .course-card.l0::before { background: var(--orange); }
+    .course-card.l0:hover { border-color: rgba(255, 138, 52, .52); }
+    .course-card.l1 {
+      background: linear-gradient(135deg, rgba(233, 248, 243, .96), #fff 58%);
+      border-color: rgba(26, 169, 129, .24);
+    }
+    .course-card.l1::before { background: var(--teal); }
+    .course-card.l1:hover { border-color: rgba(26, 169, 129, .52); }
+    .course-card.l2 {
+      background: linear-gradient(135deg, rgba(241, 237, 255, .98), #fff 58%);
+      border-color: rgba(119, 89, 216, .24);
+    }
+    .course-card.l2::before { background: var(--purple); }
+    .course-card.l2:hover { border-color: rgba(119, 89, 216, .52); }
+    .course-card:hover { transform: translateY(-2px); }
     .split { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; align-items: start; }
     .material-row {
       display: flex;
@@ -258,7 +290,8 @@
 
     const MASTER_USERNAME = "主账号";
     const MASTER_PASSWORD = "Apollo2026";
-    const MAX_INLINE_FILE_SIZE = 1024 * 1024;
+    const MAX_INLINE_FILE_SIZE = Infinity;
+    const STORAGE_BUCKET = "training-files";
 
     const courses = [
       { id: "l0-a", level: "L0", group: "认知准备", title: "公司、品牌与产品体系", desc: "认识公司业务、品牌定位、产品体系、核心卖点与培训目标。", minutes: 180, required: true },
@@ -286,6 +319,14 @@
       { id: "assistant-final", title: "亚马逊运营助理综合测试", minutes: 90, pass: 80 }
     ];
 
+    const mentorCapabilityTree = [
+      { block: "规则认知与风险意识", color: "orange", items: ["平台规则理解", "账号安全红线", "FBA流程认知", "后台权限边界"] },
+      { block: "运营基础执行能力", color: "teal", items: ["Listing基础操作", "Case处理", "A+与变体操作", "促销设置", "表格规范"] },
+      { block: "客服售后处理能力", color: "purple", items: ["邮件回复", "FBM问题处理", "FBA问题处理", "退款补发", "异常闭环"] },
+      { block: "数据经营分析能力", color: "blue", items: ["销售报表", "广告报表", "利润判断", "补货库存", "市场容量分析"] },
+      { block: "广告推广与链接操盘", color: "red", items: ["SP/SB/SD认知", "广告结构", "关键词与投放", "链接推广诊断", "复盘表达"] }
+    ];
+
     const navItems = [
       ["dashboard", "01", "学习工作台"],
       ["path", "02", "培养路径"],
@@ -302,6 +343,7 @@
       db: null,
       selectedCourseId: null,
       selectedAccountId: null,
+      selectedPathAccountId: null,
       activeExam: null,
       timerHandle: null
     };
@@ -343,22 +385,41 @@
       return Array.from(new Uint8Array(digest)).map(byte => byte.toString(16).padStart(2, "0")).join("");
     }
 
-    function fileToData(file) {
-      return new Promise((resolve, reject) => {
-        if (!file) return resolve(null);
-        if (file.size > MAX_INLINE_FILE_SIZE) {
-          reject(new Error("轻量版单个文件建议小于 1MB。大文件请用飞书/网盘/网页链接。"));
-          return;
-        }
-        const reader = new FileReader();
-        reader.onload = () => resolve({
-          file_name: file.name,
-          mime_type: file.type || "application/octet-stream",
-          file_data: reader.result
-        });
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
+    function safeFileName(name = "file") {
+      const rawName = String(name || "file");
+      const dotIndex = rawName.lastIndexOf(".");
+      const ext = dotIndex >= 0 ? rawName.slice(dotIndex).toLowerCase().replace(/[^a-z0-9.]/g, "") : "";
+      const base = dotIndex >= 0 ? rawName.slice(0, dotIndex) : rawName;
+      const asciiBase = base
+        .normalize("NFKD")
+        .replace(/[^\x00-\x7F]/g, "")
+        .replace(/[^a-zA-Z0-9._-]+/g, "_")
+        .replace(/^_+|_+$/g, "")
+        .slice(0, 60);
+      return `${asciiBase || "file"}${ext || ""}`;
+    }
+
+    async function fileToData(file, folder = "uploads") {
+      if (!file) return null;
+      if (Number.isFinite(MAX_INLINE_FILE_SIZE) && file.size > MAX_INLINE_FILE_SIZE) {
+        throw new Error("文件太大。大文件请用飞书/网盘/网页链接。");
+      }
+
+      const safeName = safeFileName(file.name);
+      const storagePath = `${folder}/${Date.now()}-${Math.random().toString(16).slice(2)}-${safeName}`;
+      const { error } = await db().storage.from(STORAGE_BUCKET).upload(storagePath, file, {
+        cacheControl: "3600",
+        upsert: false
       });
+      if (error) {
+        throw new Error(`文件上传失败：${error.message || error}。请确认已在 Supabase 运行 storage-upgrade.sql，开通 training-files 文件仓库。`);
+      }
+      const { data } = db().storage.from(STORAGE_BUCKET).getPublicUrl(storagePath);
+      return {
+        file_name: file.name,
+        mime_type: file.type || "application/octet-stream",
+        file_data: data.publicUrl
+      };
     }
 
     async function init() {
@@ -565,7 +626,7 @@
       return Math.round(total / courses.length);
     }
 
-    async function renderDashboard(page) {
+    async function renderDashboardLegacy(page) {
       if (state.account.role === "admin") {
         const { data: accounts } = await db().from("training_accounts").select("*").order("created_at", { ascending: true });
         const learners = (accounts || []).filter(account => account.role === "learner");
@@ -616,14 +677,573 @@
       }
     }
 
-    function renderPath(page) {
+    async function renderDashboardCurrent(page) {
+      if (state.account.role === "admin") {
+        const { data: accounts } = await db().from("training_accounts").select("*").order("created_at", { ascending: true });
+        const learners = (accounts || []).filter(account => account.role === "learner");
+        const { data: records } = await db()
+          .from("training_exam_records")
+          .select("*, training_accounts(display_name, username)")
+          .order("submitted_at", { ascending: false })
+          .limit(6);
+        const rows = await Promise.all(learners.map(async account => {
+          const progress = await getProgress(account.id);
+          return { account, progress: avgProgress(progress) };
+        }));
+        const overall = rows.length ? Math.round(rows.reduce((sum, row) => sum + row.progress, 0) / rows.length) : 0;
+
+        page.innerHTML = `
+          <div class="grid cols-3">
+            <div class="card"><h3>新人账号</h3><div class="stat">${learners.length}</div><p>新人可独立登录学习。</p></div>
+            <div class="card"><h3>平均学习进度</h3><div class="stat">${overall}%</div><p>所有新人课程进度平均值。</p></div>
+            <div class="card"><h3>课程资料</h3><div class="stat" id="materialCount">-</div><p>主账号统一维护。</p></div>
+          </div>
+          <div class="grid cols-2" style="margin-top:16px;">
+            <div class="card">
+              <h3>新人进度总览</h3>
+              ${rows.length ? `<table class="table"><thead><tr><th>新人</th><th>阶段</th><th>进度</th></tr></thead><tbody>
+                ${rows.map(row => `<tr><td>${escapeHtml(row.account.display_name)}</td><td>${escapeHtml(row.account.level)}</td><td>${row.progress}%<div class="progress"><i style="width:${row.progress}%"></i></div></td></tr>`).join("")}
+              </tbody></table>` : `<div class="empty">还没有新人账号，请到账号管理创建。</div>`}
+            </div>
+            <div class="card">
+              <h3>最近考试记录</h3>
+              ${(records || []).length ? `<table class="table">
+                <thead><tr><th>新人</th><th>考试</th><th>成绩</th><th>状态</th><th>上传时间</th></tr></thead>
+                <tbody>
+                  ${records.map(record => `<tr><td>${escapeHtml(record.training_accounts?.display_name || record.training_accounts?.username || "-")}</td><td>${escapeHtml(record.exam_title)}</td><td>${record.score ?? "待评分"}</td><td>${record.score == null ? "待评分" : record.passed ? "已通过" : "未通过"}</td><td>${formatDate(record.submitted_at)}</td></tr>`).join("")}
+                </tbody>
+              </table>` : `<div class="empty">还没有考试记录。</div>`}
+            </div>
+          </div>
+        `;
+        const { count } = await db().from("training_course_materials").select("*", { count: "exact", head: true });
+        document.getElementById("materialCount").textContent = count || 0;
+        return;
+      }
+
+      const progress = await getProgress();
+      const average = avgProgress(progress);
+      const { data: records } = await db().from("training_exam_records").select("*").eq("account_id", state.account.id).order("submitted_at", { ascending: false });
       page.innerHTML = `
         <div class="grid cols-3">
-          <div class="card"><span class="tag orange">L0 新人</span><h3>认知了解与红线学习</h3><p>公司、产品、平台规则、基础工具、基础后台操作、Case、A+、变体和广告基础。</p></div>
-          <div class="card"><span class="tag teal">L1 运营助理</span><h3>运营执行与分析</h3><p>售后客服、Listing 优化、市场容量表、促销提报、利润表、补货表和广告执行。</p></div>
-          <div class="card"><span class="tag purple">L2 运营专员</span><h3>自主推广链接</h3><p>能诊断链接问题，掌握一定广告能力，独立推进链接阶段目标并复盘。</p></div>
+          <div class="card"><h3>当前阶段</h3><div class="stat">${escapeHtml(state.account.level)}</div><p>L0 认知，L1 执行，L2 推广。</p></div>
+          <div class="card"><h3>学习进度</h3><div class="stat">${average}%</div><div class="progress"><i style="width:${average}%"></i></div></div>
+          <div class="card"><h3>考试记录</h3><div class="stat">${(records || []).length}</div><p>作答和成绩会保存。</p></div>
+        </div>
+        <div class="card" style="margin-top:16px;">
+          <h3>下一步</h3>
+          <p>进入「培养路径」查看当前任务，按课程资料、考试、模拟实操推进。</p>
         </div>
       `;
+    }
+
+    async function renderDashboard(page) {
+      if (state.account.role === "admin") {
+        const { data: accounts } = await db().from("training_accounts").select("*").order("created_at", { ascending: true });
+        const learners = (accounts || []).filter(account => account.role === "learner");
+        const { data: records } = await db()
+          .from("training_exam_records")
+          .select("*, training_accounts(display_name, username)")
+          .order("submitted_at", { ascending: false })
+          .limit(6);
+        const rows = await Promise.all(learners.map(async account => {
+          const progress = await getProgress(account.id);
+          return { account, progress: avgProgress(progress) };
+        }));
+        const overall = rows.length ? Math.round(rows.reduce((sum, row) => sum + row.progress, 0) / rows.length) : 0;
+        const { count: materialCount } = await db().from("training_course_materials").select("*", { count: "exact", head: true });
+        const { data: pendingScores } = await db().from("training_exam_records").select("id").is("score", null);
+        const { data: practiceTasks } = await db().from("training_practice_tasks").select("id, score");
+        const { data: mentorScores } = await db().from("training_mentor_scores").select("account_id");
+        const pendingPracticeCount = (practiceTasks || []).filter(task => task.score == null).length;
+        const mentorAccountIds = new Set((mentorScores || []).map(item => item.account_id));
+        const noMentorCount = learners.filter(account => !mentorAccountIds.has(account.id)).length;
+        const noNextActionCount = learners.filter(account => !String(account.path_next_action || "").trim()).length;
+        const riskRows = rows.filter(row => row.progress < 30).sort((a, b) => a.progress - b.progress).slice(0, 5);
+        const activeRows = rows.filter(row => row.progress >= 30).sort((a, b) => b.progress - a.progress).slice(0, 5);
+
+        page.innerHTML = `
+          <div class="grid cols-3">
+            <div class="card"><h3>新人账号</h3><div class="stat">${learners.length}</div><p>已创建新人账号数。</p></div>
+            <div class="card"><h3>平均学习进度</h3><div class="stat">${overall}%</div><p>所有新人课程进度平均值。</p></div>
+            <div class="card"><h3>课程资料</h3><div class="stat">${materialCount || 0}</div><p>主账号统一维护的资料数。</p></div>
+          </div>
+
+          <div class="grid cols-3" style="margin-top:16px;">
+            <div class="card">
+              <h3>待处理</h3>
+              <p>待评分考试：<b>${(pendingScores || []).length}</b></p>
+              <p>待评分实操：<b>${pendingPracticeCount}</b></p>
+              <p>未填下一步动作：<b>${noNextActionCount}</b></p>
+            </div>
+            <div class="card">
+              <h3>进度风险</h3>
+              ${riskRows.length ? riskRows.map(row => `<p>${escapeHtml(row.account.display_name)}：${row.progress}%</p>`).join("") : `<p class="muted">暂无低进度新人。</p>`}
+            </div>
+            <div class="card">
+              <h3>导师跟进</h3>
+              <div class="stat">${noMentorCount}</div>
+              <p>新人还没有导师评分记录。</p>
+            </div>
+          </div>
+
+          <div class="grid cols-2" style="margin-top:16px;">
+            <div class="card">
+              <h3>新人进度总览</h3>
+              ${rows.length ? `<table class="table"><thead><tr><th>新人</th><th>阶段</th><th>进度</th><th>下一步</th></tr></thead><tbody>
+                ${rows.sort((a, b) => a.progress - b.progress).map(row => `<tr><td>${escapeHtml(row.account.display_name)}</td><td>${escapeHtml(row.account.level)}</td><td>${row.progress}%<div class="progress"><i style="width:${row.progress}%"></i></div></td><td>${row.account.path_next_action ? "已安排" : "待填写"}</td></tr>`).join("")}
+              </tbody></table>` : `<div class="empty">还没有新人账号，请到账号管理创建。</div>`}
+            </div>
+            <div class="card">
+              <h3>最近考试记录</h3>
+              ${(records || []).length ? `<table class="table">
+                <thead><tr><th>新人</th><th>考试</th><th>成绩</th><th>状态</th><th>上传时间</th></tr></thead>
+                <tbody>
+                  ${records.map(record => `<tr><td>${escapeHtml(record.training_accounts?.display_name || record.training_accounts?.username || "-")}</td><td>${escapeHtml(record.exam_title)}</td><td>${record.score ?? "待评分"}</td><td>${record.score == null ? "待评分" : record.passed ? "已通过" : "未通过"}</td><td>${formatDate(record.submitted_at)}</td></tr>`).join("")}
+                </tbody>
+              </table>` : `<div class="empty">还没有考试记录。</div>`}
+            </div>
+          </div>
+
+          <div class="card" style="margin-top:16px;">
+            <h3>进度较好的新人</h3>
+            ${activeRows.length ? `<div class="grid cols-3">${activeRows.map(row => `<div><b>${escapeHtml(row.account.display_name)}</b><p class="muted">${escapeHtml(row.account.level)} · ${row.progress}%</p><div class="progress"><i style="width:${row.progress}%"></i></div></div>`).join("")}</div>` : `<div class="empty">暂无进度较好的新人。</div>`}
+          </div>
+        `;
+        return;
+      }
+
+      const progress = await getProgress();
+      const average = avgProgress(progress);
+      const { data: records } = await db().from("training_exam_records").select("*").eq("account_id", state.account.id).order("submitted_at", { ascending: false });
+      page.innerHTML = `
+        <div class="grid cols-3">
+          <div class="card"><h3>当前阶段</h3><div class="stat">${escapeHtml(state.account.level)}</div><p>L0 认知，L1 执行，L2 推广。</p></div>
+          <div class="card"><h3>学习进度</h3><div class="stat">${average}%</div><div class="progress"><i style="width:${average}%"></i></div></div>
+          <div class="card"><h3>考试记录</h3><div class="stat">${(records || []).length}</div><p>作答和成绩会保存。</p></div>
+        </div>
+        <div class="card" style="margin-top:16px;">
+          <h3>下一步</h3>
+          <p>进入「培养路径」查看当前任务。</p>
+        </div>
+      `;
+    }
+
+    async function renderPathLegacy(page) {
+      const stageConfig = [
+        {
+          level: "L0",
+          tag: "orange",
+          title: "新人认知与红线",
+          focus: "公司、产品、平台规则、基础工具、后台基础操作、Case、A+、变体与广告基础。",
+          exams: ["ops-basic", "apollo-ads-basic"],
+          gate: "L0课程完成80%以上，并通过小白初级测试后，再进入真实店铺跟岗前训练。"
+        },
+        {
+          level: "L1",
+          tag: "teal",
+          title: "运营助理执行能力",
+          focus: "售后客服、Listing优化、市场容量表、促销提报、利润表、补货表和广告执行。",
+          exams: ["apollo-ads-middle", "assistant-mid", "assistant-final"],
+          gate: "L1课程完成80%以上，模拟实操和综合测试达标后，可承担常规运营执行。"
+        },
+        {
+          level: "L2",
+          tag: "purple",
+          title: "运营专员自主推广",
+          focus: "能诊断链接问题，独立制定推广节奏，掌握一定广告优化能力并完成复盘。",
+          exams: [],
+          gate: "L2课程完成80%以上，导师评分稳定后，可进入链接操盘项目。"
+        }
+      ];
+
+      const learners = state.account.role === "admin"
+        ? (await db().from("training_accounts").select("*").eq("role", "learner").order("created_at")).data || []
+        : [state.account];
+      let selectedAccount = state.account.role === "admin"
+        ? learners.find(item => item.id === state.selectedPathAccountId) || learners[0]
+        : state.account;
+      if (selectedAccount?.id) {
+        const { data: freshAccount } = await db().from("training_accounts").select("*").eq("id", selectedAccount.id).maybeSingle();
+        if (freshAccount) {
+          selectedAccount = freshAccount;
+          if (state.account.id === freshAccount.id) {
+            state.account = freshAccount;
+            sessionStorage.setItem("apollo-db-account", JSON.stringify(freshAccount));
+          }
+        }
+      }
+      state.selectedPathAccountId = selectedAccount?.id || null;
+
+      if (!selectedAccount) {
+        page.innerHTML = `
+          <div class="card">
+            <h3>培养路径</h3>
+            <div class="empty">还没有新人账号。请先到「账号管理」创建新人账号，再回到这里查看动态培养路径。</div>
+          </div>
+        `;
+        return;
+      }
+
+      const progress = await getProgress(selectedAccount.id);
+      const { data: records } = await db().from("training_exam_records").select("*").eq("account_id", selectedAccount.id);
+      const { data: practiceTasks } = await db().from("training_practice_tasks").select("*").eq("account_id", selectedAccount.id);
+      const { data: mentorScores } = await db().from("training_mentor_scores").select("*").eq("account_id", selectedAccount.id);
+      const { data: allMaterials } = await db().from("training_course_materials").select("*").order("created_at", { ascending: false });
+      const passedExamIds = new Set((records || []).filter(record => record.passed).map(record => record.exam_id));
+      const latestRecordByExam = new Map();
+      (records || []).forEach(record => {
+        const existing = latestRecordByExam.get(record.exam_id);
+        if (!existing || new Date(record.submitted_at || 0) > new Date(existing.submitted_at || 0)) {
+          latestRecordByExam.set(record.exam_id, record);
+        }
+      });
+      const practiceScores = (practiceTasks || []).map(item => Number(item.score)).filter(score => !Number.isNaN(score));
+      const mentorScoreValues = (mentorScores || []).map(item => Number(item.score)).filter(score => !Number.isNaN(score));
+      const practiceAvg = practiceScores.length ? Math.round(practiceScores.reduce((sum, score) => sum + score, 0) / practiceScores.length) : null;
+      const mentorAvg = mentorScoreValues.length ? Math.round(mentorScoreValues.reduce((sum, score) => sum + score, 0) / mentorScoreValues.length) : null;
+
+      const levelProgress = level => {
+        const list = courses.filter(course => course.level === level);
+        if (!list.length) return 0;
+        return Math.round(list.reduce((sum, course) => sum + Number(progress.get(course.id) || 0), 0) / list.length);
+      };
+
+      const nextCourse = courses.find(course => Number(progress.get(course.id) || 0) < 80);
+      let nextAction = "路径很顺，可以进入导师复盘和下一阶段任务安排。";
+      if (nextCourse) {
+        nextAction = `优先补齐「${nextCourse.level} · ${nextCourse.title}」，当前课程进度还未达到80%。`;
+      } else if (!passedExamIds.has("ops-basic")) {
+        nextAction = "课程进度已基本达标，下一步建议完成「亚马逊运营小白初级测试」。";
+      } else if (practiceAvg == null) {
+        nextAction = "理论部分已有基础，下一步建议安排模拟实操任务并录入成绩。";
+      } else if (mentorAvg == null) {
+        nextAction = "已有实操记录，下一步建议导师补充能力评分，便于判断是否进入下一阶段。";
+      }
+
+      const stageCards = stageConfig.map(stage => {
+        const pct = levelProgress(stage.level);
+        const passedCount = stage.exams.filter(id => passedExamIds.has(id)).length;
+        const status = pct >= 80 && (stage.exams.length === 0 || passedCount === stage.exams.length)
+          ? "已达标"
+          : pct > 0 ? "进行中" : "待开始";
+        return `
+          <div class="card">
+            <span class="tag ${stage.tag}">${stage.level}</span>
+            <span class="tag ${status === "已达标" ? "teal" : status === "进行中" ? "orange" : ""}">${status}</span>
+            <h3>${stage.title}</h3>
+            <p>${stage.focus}</p>
+            <div class="progress"><i style="width:${pct}%"></i></div>
+            <p><b>${pct}%</b> 课程完成 · ${stage.exams.length ? `${passedCount}/${stage.exams.length} 项考试通过` : "以项目和导师评分判断"}</p>
+            <p class="muted">${stage.gate}</p>
+          </div>
+        `;
+      }).join("");
+
+      const stageRows = stageConfig.map(stage => {
+        const pct = levelProgress(stage.level);
+        const passedCount = stage.exams.filter(id => passedExamIds.has(id)).length;
+        return `
+          <tr>
+            <td><span class="tag ${stage.tag}">${stage.level}</span></td>
+            <td>${stage.title}<div class="muted">${stage.focus}</div></td>
+            <td>${pct}%<div class="progress"><i style="width:${pct}%"></i></div></td>
+            <td>${stage.exams.length ? `${passedCount}/${stage.exams.length} 通过` : "项目制"}</td>
+            <td>${practiceAvg == null ? "待录入" : `${practiceAvg} 分`}</td>
+            <td>${mentorAvg == null ? "待评分" : `${mentorAvg} 分`}</td>
+          </tr>
+        `;
+      }).join("");
+
+      const currentLevelCourses = courses.filter(course => course.level === selectedAccount.level);
+      const currentLevelCourseIds = new Set(currentLevelCourses.map(course => course.id));
+      const currentLevelMaterials = (allMaterials || []).filter(material => currentLevelCourseIds.has(material.course_id));
+      const nextCourseMaterials = nextCourse ? (allMaterials || []).filter(material => material.course_id === nextCourse.id) : [];
+      const materialLink = material => material.kind === "link"
+        ? `<a class="btn ghost small" href="${escapeHtml(material.url || "#")}" target="_blank">打开资料</a>`
+        : `<button class="btn ghost small" onclick="downloadData('${material.id}')">下载资料</button>`;
+      const learnerExamCards = exams.map(exam => {
+        const record = latestRecordByExam.get(exam.id);
+        const status = record?.passed ? "已通过" : record?.score != null ? "未通过" : record ? "待评分" : "待完成";
+        return `
+          <tr>
+            <td>${escapeHtml(exam.title)}</td>
+            <td><span class="tag ${record?.passed ? "teal" : record ? "orange" : ""}">${status}</span></td>
+            <td>${record?.score ?? "-"}</td>
+          </tr>
+        `;
+      }).join("");
+      const learnerPracticeRows = (practiceTasks || []).slice(0, 5).map(task => `
+        <tr>
+          <td>${escapeHtml(task.title)}</td>
+          <td>${escapeHtml(task.risk || "-")}</td>
+          <td>${task.score ?? "待评分"}</td>
+          <td>${escapeHtml(task.mentor_note || "-")}</td>
+        </tr>
+      `).join("");
+      const learnerPanel = `
+        ${state.account.role === "admin" ? `
+          <div class="card" style="margin-bottom:16px;">
+            <h3>新人视角预览</h3>
+            <p class="muted">下面这部分就是该新人登录后在「培养路径」里看到的任务看板，方便主账号核对学习安排是否清楚。</p>
+          </div>
+        ` : ""}
+        <div class="grid cols-3" style="margin-bottom:16px;">
+          <div class="card">
+            <span class="tag orange">我的下一步</span>
+            <h3>${nextCourse ? escapeHtml(nextCourse.title) : "进入阶段复盘"}</h3>
+            <p>${escapeHtml(nextAction)}</p>
+            <div class="toolbar">
+              ${nextCourse ? `<button class="btn orange" onclick="openCourseFromPath('${nextCourse.id}')">去学习这门课</button>` : `<button class="btn orange" onclick="go('mentor')">查看导师评分</button>`}
+              <button class="btn ghost" onclick="go('exams')">去理论考试</button>
+              <button class="btn ghost" onclick="go('practice')">去模拟实操</button>
+            </div>
+          </div>
+          <div class="card">
+            <span class="tag teal">当前阶段资料</span>
+            <h3>${escapeHtml(selectedAccount.level)} 资料包</h3>
+            <div class="stat">${currentLevelMaterials.length}</div>
+            <p>这些资料来自主账号统一维护，与你当前阶段课程联动。</p>
+          </div>
+          <div class="card">
+            <span class="tag purple">我的能力反馈</span>
+            <h3>实操与导师评分</h3>
+            <p>模拟实操均分：<b>${practiceAvg == null ? "待录入" : `${practiceAvg}分`}</b></p>
+            <p>导师评分均分：<b>${mentorAvg == null ? "待评分" : `${mentorAvg}分`}</b></p>
+          </div>
+        </div>
+        <div class="grid cols-2" style="margin-bottom:16px;">
+          <div class="card">
+            <h3>下一门课程资料</h3>
+            ${nextCourse ? `<p class="muted">${escapeHtml(nextCourse.level)} · ${escapeHtml(nextCourse.group)} · ${escapeHtml(nextCourse.title)}</p>` : `<p class="muted">当前课程进度已基本完成。</p>`}
+            ${nextCourseMaterials.length ? nextCourseMaterials.slice(0, 5).map(material => `
+              <div class="material-row">
+                <div>
+                  <b>${escapeHtml(material.title)}</b>
+                  <div class="muted">${escapeHtml(getCourse(material.course_id)?.title || "")}</div>
+                </div>
+                ${materialLink(material)}
+              </div>
+            `).join("") : `<div class="empty">这门课暂时没有资料。可以先去课程中心查看课程要求。</div>`}
+          </div>
+          <div class="card">
+            <h3>当前阶段全部资料</h3>
+            ${currentLevelMaterials.length ? currentLevelMaterials.slice(0, 8).map(material => `
+              <div class="material-row">
+                <div>
+                  <b>${escapeHtml(material.title)}</b>
+                  <div class="muted">${escapeHtml(getCourse(material.course_id)?.title || "")}</div>
+                </div>
+                ${materialLink(material)}
+              </div>
+            `).join("") : `<div class="empty">当前阶段还没有上传资料，主账号上传后这里会自动同步。</div>`}
+          </div>
+        </div>
+        <div class="grid cols-2" style="margin-bottom:16px;">
+          <div class="card">
+            <h3>考试推进</h3>
+            <table class="table">
+              <thead><tr><th>考试</th><th>状态</th><th>成绩</th></tr></thead>
+              <tbody>${learnerExamCards}</tbody>
+            </table>
+          </div>
+          <div class="card">
+            <h3>模拟实操任务</h3>
+            ${learnerPracticeRows ? `<table class="table"><thead><tr><th>任务</th><th>风险</th><th>成绩</th><th>导师记录</th></tr></thead><tbody>${learnerPracticeRows}</tbody></table>` : `<div class="empty">还没有模拟实操任务。导师创建后这里会自动显示。</div>`}
+          </div>
+        </div>
+      `;
+
+      page.innerHTML = `
+        ${state.account.role === "admin" ? `
+          <div class="card" style="margin-bottom:16px;">
+            <h3>选择新人查看培养路径</h3>
+            <div class="field">
+              <select onchange="state.selectedPathAccountId=this.value; renderPage();">
+                ${learners.map(item => `<option value="${item.id}" ${item.id === selectedAccount.id ? "selected" : ""}>${escapeHtml(item.display_name)}（${escapeHtml(item.username)} · ${escapeHtml(item.level)}）</option>`).join("")}
+              </select>
+            </div>
+          </div>
+        ` : ""}
+        ${learnerPanel}
+        <div class="grid cols-3">
+          <div class="card"><h3>当前新人</h3><div class="stat">${escapeHtml(selectedAccount.display_name || selectedAccount.username)}</div><p>${escapeHtml(selectedAccount.level)} 阶段 · ${escapeHtml(selectedAccount.username)}</p></div>
+          <div class="card"><h3>总体课程进度</h3><div class="stat">${avgProgress(progress)}%</div><div class="progress"><i style="width:${avgProgress(progress)}%"></i></div></div>
+          <div class="card"><h3>下一步动作</h3><p>${escapeHtml(nextAction)}</p></div>
+        </div>
+        <div class="grid cols-3" style="margin-top:16px;">
+          ${stageCards}
+        </div>
+        <div class="card" style="margin-top:16px;">
+          <h3>阶段联动表</h3>
+          <table class="table">
+            <thead><tr><th>阶段</th><th>培养重点</th><th>课程完成</th><th>理论考试</th><th>模拟实操</th><th>导师评分</th></tr></thead>
+            <tbody>${stageRows}</tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    async function renderPath(page) {
+      const stageConfig = [
+        { level: "L0", tag: "orange", title: "新人认知与红线", focus: "规则、产品、工具、基础后台操作。", exams: ["ops-basic", "apollo-ads-basic"] },
+        { level: "L1", tag: "teal", title: "运营助理执行能力", focus: "客服、Listing、市场表、促销、利润、补货、广告执行。", exams: ["apollo-ads-middle", "assistant-mid", "assistant-final"] },
+        { level: "L2", tag: "purple", title: "运营专员自主推广", focus: "链接诊断、推广节奏、广告优化、项目复盘。", exams: [] }
+      ];
+
+      const learners = state.account.role === "admin"
+        ? (await db().from("training_accounts").select("*").eq("role", "learner").order("created_at")).data || []
+        : [state.account];
+      const selectedAccount = state.account.role === "admin"
+        ? learners.find(item => item.id === state.selectedPathAccountId) || learners[0]
+        : state.account;
+      state.selectedPathAccountId = selectedAccount?.id || null;
+
+      if (!selectedAccount) {
+        page.innerHTML = `<div class="card"><h3>培养路径</h3><div class="empty">还没有新人账号，请先到「账号管理」创建。</div></div>`;
+        return;
+      }
+
+      const progress = await getProgress(selectedAccount.id);
+      const { data: records } = await db().from("training_exam_records").select("*").eq("account_id", selectedAccount.id);
+      const { data: practiceTasks } = await db().from("training_practice_tasks").select("*").eq("account_id", selectedAccount.id);
+      const { data: mentorScores } = await db().from("training_mentor_scores").select("*").eq("account_id", selectedAccount.id);
+      const { data: allMaterials } = await db().from("training_course_materials").select("*").order("created_at", { ascending: false });
+
+      const passedExamIds = new Set((records || []).filter(record => record.passed).map(record => record.exam_id));
+      const latestRecordByExam = new Map();
+      (records || []).forEach(record => {
+        const existing = latestRecordByExam.get(record.exam_id);
+        if (!existing || new Date(record.submitted_at || 0) > new Date(existing.submitted_at || 0)) latestRecordByExam.set(record.exam_id, record);
+      });
+
+      const practiceScores = (practiceTasks || []).map(item => Number(item.score)).filter(score => !Number.isNaN(score));
+      const mentorScoreValues = (mentorScores || []).map(item => Number(item.score)).filter(score => !Number.isNaN(score));
+      const practiceAvg = practiceScores.length ? Math.round(practiceScores.reduce((sum, score) => sum + score, 0) / practiceScores.length) : null;
+      const mentorAvg = mentorScoreValues.length ? Math.round(mentorScoreValues.reduce((sum, score) => sum + score, 0) / mentorScoreValues.length) : null;
+      const totalProgress = avgProgress(progress);
+      const mentorOverallNote = (selectedAccount.mentor_overall_note || "").trim();
+
+      const levelProgress = level => {
+        const list = courses.filter(course => course.level === level);
+        if (!list.length) return 0;
+        return Math.round(list.reduce((sum, course) => sum + Number(progress.get(course.id) || 0), 0) / list.length);
+      };
+
+      const nextCourse = courses.find(course => Number(progress.get(course.id) || 0) < 80);
+      const autoNextAction = nextCourse ? `补齐 ${nextCourse.level}「${nextCourse.title}」课程进度。` : "课程进度已基本完成，等待导师安排下一阶段。";
+      const nextAction = (selectedAccount.path_next_action || "").trim() || autoNextAction;
+
+      const stageRows = stageConfig.map(stage => {
+        const pct = levelProgress(stage.level);
+        const passedCount = stage.exams.filter(id => passedExamIds.has(id)).length;
+        return `
+          <tr>
+            <td><span class="tag ${stage.tag}">${stage.level}</span></td>
+            <td><b>${stage.title}</b><div class="muted">${stage.focus}</div></td>
+            <td>${pct}%<div class="progress"><i style="width:${pct}%"></i></div></td>
+            <td>${stage.exams.length ? `${passedCount}/${stage.exams.length}` : "项目制"}</td>
+            <td>${practiceAvg == null ? "待录入" : `${practiceAvg} 分`}</td>
+            <td>${mentorAvg == null ? "待评分" : `${mentorAvg} 分`}</td>
+          </tr>
+        `;
+      }).join("");
+
+      if (state.account.role === "admin") {
+        page.innerHTML = `
+          <div class="card" style="margin-bottom:16px;">
+            <h3>选择新人</h3>
+            <div class="field">
+              <select onchange="state.selectedPathAccountId=this.value; renderPage();">
+                ${learners.map(item => `<option value="${item.id}" ${item.id === selectedAccount.id ? "selected" : ""}>${escapeHtml(item.display_name)}（${escapeHtml(item.username)} · ${escapeHtml(item.level)}）</option>`).join("")}
+              </select>
+            </div>
+          </div>
+          <div class="grid cols-3">
+            <div class="card"><h3>当前新人</h3><div class="stat">${escapeHtml(selectedAccount.display_name || selectedAccount.username)}</div><p>${escapeHtml(selectedAccount.level)} 阶段 · ${escapeHtml(selectedAccount.username)}</p></div>
+            <div class="card"><h3>课程进度</h3><div class="stat">${totalProgress}%</div><div class="progress"><i style="width:${totalProgress}%"></i></div></div>
+            <div class="card"><h3>考试/实操</h3><p>通过考试：${passedExamIds.size} 项</p><p>实操均分：${practiceAvg == null ? "待录入" : `${practiceAvg} 分`}</p><p>导师均分：${mentorAvg == null ? "待评分" : `${mentorAvg} 分`}</p></div>
+          </div>
+          <div class="card" style="margin-top:16px;">
+            <h3>下一步动作</h3>
+            <textarea id="pathNextAction" placeholder="例如：本周完成 L0 红线课程和小白初级测试。">${escapeHtml(selectedAccount.path_next_action || "")}</textarea>
+            <div class="toolbar">
+              <button class="btn orange" onclick="savePathNextAction('${selectedAccount.id}')">保存并同步给新人</button>
+              <span class="muted">新人会在培养路径看到这段话。</span>
+            </div>
+          </div>
+          <div class="card" style="margin-top:16px;">
+            <h3>阶段进度</h3>
+            <table class="table">
+              <thead><tr><th>阶段</th><th>培养重点</th><th>课程</th><th>考试</th><th>实操</th><th>导师</th></tr></thead>
+              <tbody>${stageRows}</tbody>
+            </table>
+          </div>
+        `;
+        return;
+      }
+
+      const currentLevelCourses = courses.filter(course => course.level === selectedAccount.level);
+      const currentLevelCourseIds = new Set(currentLevelCourses.map(course => course.id));
+      const currentLevelMaterials = (allMaterials || []).filter(material => currentLevelCourseIds.has(material.course_id));
+      const nextCourseMaterials = nextCourse ? (allMaterials || []).filter(material => material.course_id === nextCourse.id) : [];
+      const materialLink = material => material.kind === "link"
+        ? `<a class="btn ghost small" href="${escapeHtml(material.url || "#")}" target="_blank">打开</a>`
+        : `<button class="btn ghost small" onclick="downloadData('${material.id}')">下载</button>`;
+      const learnerExamRows = exams.map(exam => {
+        const record = latestRecordByExam.get(exam.id);
+        const status = record?.passed ? "已通过" : record?.score != null ? "未通过" : record ? "待评分" : "待完成";
+        return `<tr><td>${escapeHtml(exam.title)}</td><td>${status}</td><td>${record?.score ?? "-"}</td></tr>`;
+      }).join("");
+      const learnerPracticeRows = (practiceTasks || []).slice(0, 5).map(task => `<tr><td>${escapeHtml(task.title)}</td><td>${escapeHtml(task.risk || "-")}</td><td>${task.score ?? "待评分"}</td><td>${escapeHtml(task.mentor_note || "-")}</td></tr>`).join("");
+
+      page.innerHTML = `
+        <div class="grid cols-3">
+          <div class="card"><h3>我的阶段</h3><div class="stat">${escapeHtml(selectedAccount.level)}</div><p>${escapeHtml(selectedAccount.display_name || selectedAccount.username)}</p></div>
+          <div class="card"><h3>课程进度</h3><div class="stat">${totalProgress}%</div><div class="progress"><i style="width:${totalProgress}%"></i></div></div>
+          <div class="card"><h3>下一步动作</h3><p>${escapeHtml(nextAction)}</p></div>
+        </div>
+        <div class="card" style="margin-top:16px;">
+          <h3>导师综合评价</h3>
+          ${mentorOverallNote ? `<p>${escapeHtml(mentorOverallNote)}</p>` : `<div class="empty">导师还没有填写综合评价。</div>`}
+        </div>
+        <div class="grid cols-2" style="margin-top:16px;">
+          <div class="card">
+            <h3>下一门课程资料</h3>
+            ${nextCourse ? `<p class="muted">${escapeHtml(nextCourse.level)} · ${escapeHtml(nextCourse.title)}</p>` : `<p class="muted">当前课程进度已基本完成。</p>`}
+            ${nextCourseMaterials.length ? nextCourseMaterials.slice(0, 5).map(material => `<div class="material-row"><div><b>${escapeHtml(material.title)}</b><div class="muted">${escapeHtml(getCourse(material.course_id)?.title || "")}</div></div>${materialLink(material)}</div>`).join("") : `<div class="empty">暂无资料。</div>`}
+          </div>
+          <div class="card">
+            <h3>当前阶段资料</h3>
+            ${currentLevelMaterials.length ? currentLevelMaterials.slice(0, 8).map(material => `<div class="material-row"><div><b>${escapeHtml(material.title)}</b><div class="muted">${escapeHtml(getCourse(material.course_id)?.title || "")}</div></div>${materialLink(material)}</div>`).join("") : `<div class="empty">当前阶段暂无资料。</div>`}
+          </div>
+        </div>
+        <div class="grid cols-2" style="margin-top:16px;">
+          <div class="card">
+            <h3>考试推进</h3>
+            <table class="table"><thead><tr><th>考试</th><th>状态</th><th>成绩</th></tr></thead><tbody>${learnerExamRows}</tbody></table>
+          </div>
+          <div class="card">
+            <h3>模拟实操</h3>
+            ${learnerPracticeRows ? `<table class="table"><thead><tr><th>任务</th><th>风险</th><th>成绩</th><th>导师记录</th></tr></thead><tbody>${learnerPracticeRows}</tbody></table>` : `<div class="empty">暂无模拟实操任务。</div>`}
+          </div>
+        </div>
+        <div class="card" style="margin-top:16px;">
+          <h3>阶段进度</h3>
+          <table class="table">
+            <thead><tr><th>阶段</th><th>培养重点</th><th>课程</th><th>考试</th><th>实操</th><th>导师</th></tr></thead>
+            <tbody>${stageRows}</tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    async function savePathNextAction(accountId) {
+      const nextAction = document.getElementById("pathNextAction").value.trim();
+      const { error } = await db().from("training_accounts").update({ path_next_action: nextAction }).eq("id", accountId).eq("role", "learner");
+      if (error) return alert(`保存失败：${error.message || error}。如果提示字段不存在，请先在 Supabase 运行 path-upgrade.sql。`);
+      alert("下一步动作已保存，并会同步到新人账号。");
+      renderPage();
     }
 
     async function renderCourses(page) {
@@ -641,7 +1261,7 @@
           ${courses.map(course => {
             const pct = Number(progress.get(course.id) || 0);
             return `
-              <div class="card course-card" onclick="openCourse('${course.id}')">
+              <div class="card course-card ${course.level.toLowerCase()}" onclick="openCourse('${course.id}')">
                 <span class="tag ${course.level === "L0" ? "orange" : course.level === "L1" ? "teal" : "purple"}">${course.level}</span>
                 <span class="tag">${escapeHtml(course.group)}</span>
                 <h3>${escapeHtml(course.title)}</h3>
@@ -658,6 +1278,12 @@
     function openCourse(courseId) {
       state.selectedCourseId = courseId;
       renderPage();
+    }
+
+    function openCourseFromPath(courseId) {
+      state.page = "courses";
+      state.selectedCourseId = courseId;
+      renderApp();
     }
 
     async function renderCourseDetail(page, courseId) {
@@ -691,7 +1317,8 @@
               <h3>主账号上传资料</h3>
               <div class="field"><label>资料标题</label><input id="materialTitle" placeholder="例如：Listing 编辑 SOP" /></div>
               <div class="field"><label>飞书/网页/网盘链接</label><input id="materialUrl" placeholder="https://..." /></div>
-              <div class="field"><label>或上传小文件（轻量版建议小于 1MB）</label><input id="materialFile" type="file" /></div>
+              <div class="field"><label>或上传本地文件</label><input id="materialFile" type="file" /></div>
+              <p class="muted">文件会保存到线上文件仓库，数据库只记录下载地址。</p>
               <div class="field"><label>备注</label><textarea id="materialNote" placeholder="这份资料适合怎么学"></textarea></div>
               <button class="btn orange" onclick="saveMaterial('${courseId}')">保存课程资料</button>
             ` : ""}
@@ -738,7 +1365,7 @@
       if (!title) return alert("请填写资料标题。");
       if (!url && !file) return alert("请填写链接，或上传一个小文件。");
       try {
-        const fileData = await fileToData(file);
+        const fileData = await fileToData(file, `course-materials/${courseId}`);
         await db().from("training_course_materials").insert({
           course_id: courseId,
           title,
@@ -811,6 +1438,7 @@
           <span class="tag orange">理论考试</span>
           <h3>${escapeHtml(title)}</h3>
           <p>理论考试 - 建议 ${config.minutes || 60} 分钟 - ${config.question_url || config.question_file_data ? "已上传试题" : "未上传试题"}</p>
+          ${config.question_file_name ? `<p class="muted">已保存试题文件：${escapeHtml(config.question_file_name)}${config.updated_at ? ` · 更新时间：${formatDate(config.updated_at)}` : ""}</p>` : ""}
           <p>通过线：成绩大于 ${config.pass_score || config.pass || 80} 分</p>
           <div class="toolbar">
             ${config.question_url ? `<a class="btn ghost small" href="${escapeHtml(config.question_url)}" target="_blank">当前试题链接</a>` : ""}
@@ -821,7 +1449,9 @@
             <div class="field"><label>建议分钟</label><input id="min-${config.exam_id}" type="number" value="${config.minutes || 60}" /></div>
             <div class="field"><label>通过线</label><input id="pass-${config.exam_id}" type="number" value="${config.pass_score || 80}" /></div>
             <div class="field"><label>试题飞书/网页链接</label><input id="qurl-${config.exam_id}" value="${escapeHtml(config.question_url || "")}" /></div>
-            <div class="field"><label>或上传试题文件（轻量版建议小于 1MB）</label><input id="qfile-${config.exam_id}" type="file" /></div>
+            <div class="field"><label>或上传试题文件</label><input id="qfile-${config.exam_id}" type="file" /></div>
+            <p class="muted">试题文件会保存到线上文件仓库，数据库只记录下载地址。</p>
+            <p class="muted">选择新文件并保存后，会替换当前保存的试题原文件；不选择新文件时，会保留原文件。</p>
             <button class="btn blue" onclick="saveExamConfig('${config.exam_id}')">保存试题设置</button>
           ` : ""}
         </div>
@@ -835,7 +1465,7 @@
           <div class="time" id="examTimer">--:--</div>
           <p>请在倒计时结束前上传做完的题目。倒计时剩余 15 分钟时会自动提醒。</p>
           <div class="field"><label style="color:white;">作答后上传：链接</label><input id="answerUrl" placeholder="飞书/网页/网盘链接" /></div>
-          <div class="field"><label style="color:white;">或上传作答文件（轻量版建议小于 1MB）</label><input id="answerFile" type="file" /></div>
+          <div class="field"><label style="color:white;">或上传作答文件</label><input id="answerFile" type="file" /></div>
           <button class="btn" onclick="submitAnswer()">提交作答</button>
         </div>
       `;
@@ -865,24 +1495,32 @@
     }
 
     async function saveExamConfig(examId) {
-      const minutes = Number(document.getElementById(`min-${examId}`).value || 60);
-      const pass_score = Number(document.getElementById(`pass-${examId}`).value || 80);
-      const question_url = document.getElementById(`qurl-${examId}`).value.trim();
-      const file = document.getElementById(`qfile-${examId}`).files[0];
-      const fileData = file ? await fileToData(file) : null;
-      const original = exams.find(exam => exam.id === examId);
-      await db().from("training_exam_configs").upsert({
-        exam_id: examId,
-        title: original.title,
-        minutes,
-        pass_score,
-        question_url,
-        question_file_name: fileData?.file_name || null,
-        question_mime_type: fileData?.mime_type || null,
-        question_file_data: fileData?.file_data || null,
-        updated_at: new Date().toISOString()
-      }, { onConflict: "exam_id" });
-      renderPage();
+      try {
+        const minutes = Number(document.getElementById(`min-${examId}`).value || 60);
+        const pass_score = Number(document.getElementById(`pass-${examId}`).value || 80);
+        const question_url = document.getElementById(`qurl-${examId}`).value.trim();
+        const file = document.getElementById(`qfile-${examId}`).files[0];
+        const fileData = file ? await fileToData(file, `exam-questions/${examId}`) : null;
+        const original = exams.find(exam => exam.id === examId);
+        const { data: existing, error: existingError } = await db().from("training_exam_configs").select("*").eq("exam_id", examId).maybeSingle();
+        if (existingError) throw existingError;
+        const { error } = await db().from("training_exam_configs").upsert({
+          exam_id: examId,
+          title: original.title,
+          minutes,
+          pass_score,
+          question_url,
+          question_file_name: fileData?.file_name || existing?.question_file_name || null,
+          question_mime_type: fileData?.mime_type || existing?.question_mime_type || null,
+          question_file_data: fileData?.file_data || existing?.question_file_data || null,
+          updated_at: new Date().toISOString()
+        }, { onConflict: "exam_id" });
+        if (error) throw error;
+        alert("试题设置已保存。");
+        renderPage();
+      } catch (error) {
+        alert(`保存试题设置失败：${error.message || error}`);
+      }
     }
 
     async function downloadQuestion(examId) {
@@ -911,7 +1549,7 @@
       const answer_url = document.getElementById("answerUrl").value.trim();
       const file = document.getElementById("answerFile").files[0];
       if (!answer_url && !file) return alert("请上传作答文件，或填写作答链接。");
-      const fileData = file ? await fileToData(file) : null;
+      const fileData = file ? await fileToData(file, `exam-answers/${state.activeExam.examId}/${state.account.id}`) : null;
       const { data: config } = await db().from("training_exam_configs").select("*").eq("exam_id", state.activeExam.examId).single();
       await db().from("training_exam_records").insert({
         account_id: state.account.id,
@@ -1009,7 +1647,7 @@
       renderPage();
     }
 
-    async function renderMentor(page) {
+    async function renderMentorLegacy(page) {
       const learners = state.account.role === "admin"
         ? (await db().from("training_accounts").select("*").eq("role", "learner").order("created_at")).data || []
         : [state.account];
@@ -1032,14 +1670,14 @@
           ` : `<p class="muted">这里展示导师给你的能力评分和记录。</p>`}
         </div>
         <div class="card" style="margin-top:16px;">
-          ${(scores || []).length ? `<table class="table"><thead><tr><th>能力项</th><th>评分</th><th>导师记录</th><th>更新时间</th></tr></thead><tbody>
-            ${(scores || []).map(item => `<tr><td>${escapeHtml(item.ability)}</td><td>${item.score}</td><td>${escapeHtml(item.note || "")}</td><td>${formatDate(item.updated_at)}</td></tr>`).join("")}
+          ${(scores || []).length ? `<table class="table"><thead><tr><th>能力项</th><th>评分</th><th>导师记录</th><th>更新时间</th>${state.account.role === "admin" ? "<th>操作</th>" : ""}</tr></thead><tbody>
+            ${(scores || []).map(item => `<tr><td>${escapeHtml(item.ability)}</td><td>${item.score}</td><td>${escapeHtml(item.note || "")}</td><td>${formatDate(item.updated_at)}</td>${state.account.role === "admin" ? `<td><button class="btn red small" onclick="deleteMentorScore('${item.id}')">删除</button></td>` : ""}</tr>`).join("")}
           </tbody></table>` : `<div class="empty">还没有导师评分。</div>`}
         </div>
       `;
     }
 
-    async function saveMentorScore(accountId) {
+    async function saveMentorScoreLegacy(accountId) {
       if (!accountId) return alert("请先创建新人账号。");
       const ability = document.getElementById("mentorAbility").value.trim();
       const score = Number(document.getElementById("mentorScore").value || 0);
@@ -1051,6 +1689,305 @@
         note: document.getElementById("mentorNote").value.trim(),
         updated_at: new Date().toISOString()
       });
+      renderPage();
+    }
+
+    async function deleteMentorScore(scoreId) {
+      if (!confirm("确定删除这条导师评分吗？删除后新人账号也看不到这条记录。")) return;
+      await db().from("training_mentor_scores").delete().eq("id", scoreId);
+      renderPage();
+    }
+
+    function splitMentorAbility(ability = "") {
+      const parts = String(ability).split("｜");
+      if (parts.length >= 2) return { block: parts[0], item: parts.slice(1).join("｜") };
+      for (const group of mentorCapabilityTree) {
+        if (group.items.includes(ability)) return { block: group.block, item: ability };
+      }
+      return { block: "其他记录", item: ability || "未命名能力" };
+    }
+
+    function updateMentorSubAbilityOptions() {
+      const block = document.getElementById("mentorBlock")?.value;
+      const sub = document.getElementById("mentorSubAbility");
+      if (!sub) return;
+      const group = mentorCapabilityTree.find(item => item.block === block) || mentorCapabilityTree[0];
+      sub.innerHTML = group.items.map(item => `<option value="${escapeHtml(item)}">${escapeHtml(item)}</option>`).join("");
+    }
+
+    async function renderMentorWithCapabilityTree(page) {
+      const learners = state.account.role === "admin"
+        ? (await db().from("training_accounts").select("*").eq("role", "learner").order("created_at")).data || []
+        : [state.account];
+      const selected = state.account.role === "admin" ? (state.selectedAccountId || learners[0]?.id) : state.account.id;
+      state.selectedAccountId = selected;
+      const { data: scores } = selected
+        ? await db().from("training_mentor_scores").select("*").eq("account_id", selected).order("updated_at", { ascending: false })
+        : { data: [] };
+
+      const grouped = mentorCapabilityTree.map(group => {
+        const items = (scores || []).filter(score => splitMentorAbility(score.ability).block === group.block);
+        const avg = items.length ? Math.round(items.reduce((sum, item) => sum + Number(item.score || 0), 0) / items.length) : null;
+        return { ...group, records: items, avg };
+      });
+      const otherScores = (scores || []).filter(score => !mentorCapabilityTree.some(group => group.block === splitMentorAbility(score.ability).block));
+
+      const capabilityCards = grouped.map(group => `
+        <div class="card">
+          <span class="tag ${group.color}">${group.block}</span>
+          <div class="stat">${group.avg == null ? "-" : group.avg}</div>
+          <p class="muted">${group.items.join(" / ")}</p>
+          <div class="progress"><i style="width:${group.avg || 0}%"></i></div>
+          <p>${group.records.length} 条评分记录</p>
+        </div>
+      `).join("");
+
+      const scoreRows = (scores || []).map(score => {
+        const parsed = splitMentorAbility(score.ability);
+        return `
+          <tr>
+            <td>${escapeHtml(parsed.block)}</td>
+            <td>${escapeHtml(parsed.item)}</td>
+            <td>${score.score}</td>
+            <td>${escapeHtml(score.note || "")}</td>
+            <td>${formatDate(score.updated_at)}</td>
+            ${state.account.role === "admin" ? `<td><button class="btn red small" onclick="deleteMentorScore('${score.id}')">删除</button></td>` : ""}
+          </tr>
+        `;
+      }).join("");
+
+      page.innerHTML = `
+        <div class="card">
+          <h3>导师评分</h3>
+          ${state.account.role === "admin" ? `
+            <div class="field">
+              <label>选择新人</label>
+              <select onchange="state.selectedAccountId=this.value; renderPage();">
+                ${learners.map(item => `<option value="${item.id}" ${item.id === selected ? "selected" : ""}>${escapeHtml(item.display_name)}（${escapeHtml(item.username)}）</option>`).join("")}
+              </select>
+            </div>
+            <div class="grid cols-3">
+              <div class="field">
+                <label>五大能力板块</label>
+                <select id="mentorBlock" onchange="updateMentorSubAbilityOptions()">
+                  ${mentorCapabilityTree.map(group => `<option value="${escapeHtml(group.block)}">${escapeHtml(group.block)}</option>`).join("")}
+                </select>
+              </div>
+              <div class="field">
+                <label>细分能力</label>
+                <select id="mentorSubAbility">
+                  ${mentorCapabilityTree[0].items.map(item => `<option value="${escapeHtml(item)}">${escapeHtml(item)}</option>`).join("")}
+                </select>
+              </div>
+              <div class="field">
+                <label>评分</label>
+                <input id="mentorScore" type="number" min="0" max="100" placeholder="0-100" />
+              </div>
+            </div>
+            <div class="field">
+              <label>导师记录</label>
+              <textarea id="mentorNote" placeholder="记录观察到的表现、风险点或下一步建议"></textarea>
+            </div>
+            <button class="btn orange" onclick="saveMentorScore('${selected || ""}')">保存评分</button>
+          ` : `<p class="muted">这里展示导师基于五大能力板块给你的评分和记录。</p>`}
+        </div>
+
+        <div class="grid cols-3" style="margin-top:16px;">
+          ${capabilityCards}
+        </div>
+
+        ${otherScores.length ? `<div class="card" style="margin-top:16px;"><h3>其他历史记录</h3><p class="muted">${otherScores.length} 条旧记录不属于当前五大板块，但仍保留在明细里。</p></div>` : ""}
+
+        <div class="card" style="margin-top:16px;">
+          <h3>评分记录</h3>
+          ${scoreRows ? `<table class="table"><thead><tr><th>能力板块</th><th>细分能力</th><th>评分</th><th>导师记录</th><th>更新时间</th>${state.account.role === "admin" ? "<th>操作</th>" : ""}</tr></thead><tbody>${scoreRows}</tbody></table>` : `<div class="empty">还没有导师评分。</div>`}
+        </div>
+      `;
+    }
+
+    async function saveMentorScoreWithCapabilityTree(accountId) {
+      if (!accountId) return alert("请先创建新人账号。");
+      const block = document.getElementById("mentorBlock").value;
+      const subAbility = document.getElementById("mentorSubAbility").value;
+      const score = Number(document.getElementById("mentorScore").value || 0);
+      const note = document.getElementById("mentorNote").value.trim();
+      if (!block || !subAbility) return alert("请选择能力板块和细分能力。");
+      if (Number.isNaN(score) || score < 0 || score > 100) return alert("评分请输入 0-100。");
+      const { error } = await db().from("training_mentor_scores").insert({
+        account_id: accountId,
+        ability: `${block}｜${subAbility}`,
+        score,
+        note,
+        updated_at: new Date().toISOString()
+      });
+      if (error) return alert(error.message || error);
+      renderPage();
+    }
+
+    async function renderMentor(page) {
+      let learners = [];
+      if (state.account.role === "admin") {
+        learners = (await db().from("training_accounts").select("*").eq("role", "learner").order("created_at")).data || [];
+      } else {
+        const { data: freshAccount } = await db().from("training_accounts").select("*").eq("id", state.account.id).maybeSingle();
+        state.account = freshAccount || state.account;
+        sessionStorage.setItem("apolloTrainingAccount", JSON.stringify(state.account));
+        learners = [state.account];
+      }
+      const selected = state.account.role === "admin" ? (state.selectedAccountId || learners[0]?.id) : state.account.id;
+      state.selectedAccountId = selected;
+      const selectedLearner = learners.find(item => item.id === selected) || state.account;
+      const mentorOverallNote = (selectedLearner?.mentor_overall_note || "").trim();
+      const { data: scores } = selected
+        ? await db().from("training_mentor_scores").select("*").eq("account_id", selected).order("updated_at", { ascending: false })
+        : { data: [] };
+
+      const mentorStageWeights = {
+        L0: { "规则认知与风险意识": 25, "运营基础执行能力": 25, "客服售后处理能力": 20, "数据经营分析能力": 10, "广告推广与链接操盘": 10 },
+        L1: { "规则认知与风险意识": 20, "运营基础执行能力": 20, "客服售后处理能力": 20, "数据经营分析能力": 25, "广告推广与链接操盘": 15 },
+        L2: { "规则认知与风险意识": 15, "运营基础执行能力": 15, "客服售后处理能力": 10, "数据经营分析能力": 25, "广告推广与链接操盘": 35 }
+      };
+      const currentWeights = mentorStageWeights[selectedLearner?.level] || mentorStageWeights.L0;
+      const grouped = mentorCapabilityTree.map(group => {
+        const records = (scores || []).filter(score => splitMentorAbility(score.ability).block === group.block);
+        const avg = records.length ? Math.round(records.reduce((sum, item) => sum + Number(item.score || 0), 0) / records.length) : null;
+        return { ...group, records, avg, weight: currentWeights[group.block] || 0 };
+      });
+      const scoredGroups = grouped.filter(group => group.avg != null && group.weight > 0);
+      const scoredWeight = scoredGroups.reduce((sum, group) => sum + group.weight, 0);
+      const weightedScore = scoredWeight ? Math.round(scoredGroups.reduce((sum, group) => sum + group.avg * group.weight, 0) / scoredWeight) : null;
+      const missingGroups = grouped.filter(group => group.avg == null).map(group => group.block);
+
+      const capabilityCards = grouped.map(group => `
+        <div class="card">
+          <span class="tag ${group.color}">${group.block}</span>
+          <div class="stat">${group.avg == null ? "-" : group.avg}</div>
+          <p class="muted">权重：${group.weight}% · ${group.records.length} 条记录</p>
+          <div class="progress"><i style="width:${group.avg || 0}%"></i></div>
+          <p class="muted">${group.items.join(" / ")}</p>
+        </div>
+      `).join("");
+
+      const weightRows = grouped.map(group => `
+        <tr>
+          <td>${escapeHtml(group.block)}</td>
+          <td>${group.weight}%</td>
+          <td>${group.avg == null ? "待补评分" : `${group.avg} 分`}</td>
+        </tr>
+      `).join("");
+
+      const scoreRows = (scores || []).map(score => {
+        const parsed = splitMentorAbility(score.ability);
+        return `
+          <tr>
+            <td>${escapeHtml(parsed.block)}</td>
+            <td>${escapeHtml(parsed.item)}</td>
+            <td>${score.score}</td>
+            <td>${escapeHtml(score.note || "")}</td>
+            <td>${formatDate(score.updated_at)}</td>
+            ${state.account.role === "admin" ? `<td><button class="btn red small" onclick="deleteMentorScore('${score.id}')">删除</button></td>` : ""}
+          </tr>
+        `;
+      }).join("");
+
+      page.innerHTML = `
+        <div class="card">
+          <h3>导师评分</h3>
+          ${state.account.role === "admin" ? `
+            <div class="field">
+              <label>选择新人</label>
+              <select onchange="state.selectedAccountId=this.value; renderPage();">
+                ${learners.map(item => `<option value="${item.id}" ${item.id === selected ? "selected" : ""}>${escapeHtml(item.display_name)}（${escapeHtml(item.username)} · ${escapeHtml(item.level)}）</option>`).join("")}
+              </select>
+            </div>
+            <div class="grid cols-3">
+              <div class="field">
+                <label>五大能力板块</label>
+                <select id="mentorBlock" onchange="updateMentorSubAbilityOptions()">
+                  ${mentorCapabilityTree.map(group => `<option value="${escapeHtml(group.block)}">${escapeHtml(group.block)}</option>`).join("")}
+                </select>
+              </div>
+              <div class="field">
+                <label>细分能力</label>
+                <select id="mentorSubAbility">
+                  ${mentorCapabilityTree[0].items.map(item => `<option value="${escapeHtml(item)}">${escapeHtml(item)}</option>`).join("")}
+                </select>
+              </div>
+              <div class="field">
+                <label>评分</label>
+                <input id="mentorScore" type="number" min="0" max="100" placeholder="0-100" />
+              </div>
+            </div>
+            <div class="field">
+              <label>导师记录</label>
+              <textarea id="mentorNote" placeholder="记录表现、风险点或下一步建议"></textarea>
+            </div>
+            <button class="btn orange" onclick="saveMentorScore('${selected || ""}')">保存评分</button>
+          ` : `<p class="muted">这里展示导师基于五大能力板块给你的评分和记录。</p>`}
+        </div>
+
+        <div class="grid cols-2" style="margin-top:16px;">
+          <div class="card">
+            <h3>综合评分</h3>
+            <div class="stat">${weightedScore == null ? "-" : weightedScore}</div>
+            <p>当前阶段：${escapeHtml(selectedLearner?.level || "L0")}，按阶段权重计算。</p>
+            ${missingGroups.length ? `<p class="muted">待补评分：${missingGroups.join(" / ")}</p>` : `<p class="muted">五大板块已全部评分。</p>`}
+            <div style="margin-top:14px;">
+              <h3>导师综合评价</h3>
+              ${state.account.role === "admin" ? `
+                <textarea id="mentorOverallNote" placeholder="例如：规则意识较好，基础操作还需要加强，下一阶段重点练习广告结构和利润表分析。">${escapeHtml(mentorOverallNote)}</textarea>
+                <div class="toolbar">
+                  <button class="btn orange" onclick="saveMentorOverallNote('${selected || ""}')">保存并同步给新人</button>
+                  <span class="muted">新人会在培养路径和导师评分里看到这段评价。</span>
+                </div>
+              ` : mentorOverallNote ? `<p>${escapeHtml(mentorOverallNote)}</p>` : `<div class="empty">导师还没有填写综合评价。</div>`}
+            </div>
+          </div>
+          <div class="card">
+            <h3>当前阶段权重</h3>
+            <table class="table">
+              <thead><tr><th>能力板块</th><th>权重</th><th>得分</th></tr></thead>
+              <tbody>${weightRows}</tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="grid cols-3" style="margin-top:16px;">
+          ${capabilityCards}
+        </div>
+
+        <div class="card" style="margin-top:16px;">
+          <h3>评分记录</h3>
+          ${scoreRows ? `<table class="table"><thead><tr><th>能力板块</th><th>细分能力</th><th>评分</th><th>导师记录</th><th>更新时间</th>${state.account.role === "admin" ? "<th>操作</th>" : ""}</tr></thead><tbody>${scoreRows}</tbody></table>` : `<div class="empty">还没有导师评分。</div>`}
+        </div>
+      `;
+    }
+
+    async function saveMentorScore(accountId) {
+      if (!accountId) return alert("请先创建新人账号。");
+      const block = document.getElementById("mentorBlock").value;
+      const subAbility = document.getElementById("mentorSubAbility").value;
+      const score = Number(document.getElementById("mentorScore").value || 0);
+      const note = document.getElementById("mentorNote").value.trim();
+      if (!block || !subAbility) return alert("请选择能力板块和细分能力。");
+      if (Number.isNaN(score) || score < 0 || score > 100) return alert("评分请输入 0-100。");
+      const { error } = await db().from("training_mentor_scores").insert({
+        account_id: accountId,
+        ability: `${block}｜${subAbility}`,
+        score,
+        note,
+        updated_at: new Date().toISOString()
+      });
+      if (error) return alert(error.message || error);
+      renderPage();
+    }
+
+    async function saveMentorOverallNote(accountId) {
+      if (!accountId) return alert("请先创建新人账号。");
+      const note = document.getElementById("mentorOverallNote").value.trim();
+      const { error } = await db().from("training_accounts").update({ mentor_overall_note: note }).eq("id", accountId).eq("role", "learner");
+      if (error) return alert(`保存失败：${error.message || error}。如果提示字段不存在，请先在 Supabase 运行 mentor-summary-upgrade.sql。`);
+      alert("导师综合评价已保存，并会同步到新人账号。");
       renderPage();
     }
 
@@ -1083,8 +2020,8 @@
         </div>
         <div class="card" style="margin-top:16px;">
           <h3>新人账号与成长汇总</h3>
-          ${rows.length ? `<table class="table"><thead><tr><th>新人</th><th>登录账号</th><th>密码登记</th><th>阶段</th><th>学习进度</th><th>通过考试</th></tr></thead><tbody>
-            ${rows.map(row => `<tr><td>${escapeHtml(row.account.display_name)}</td><td>${escapeHtml(row.account.username)}</td><td>${escapeHtml(row.account.password_text)}</td><td>${escapeHtml(row.account.level)}</td><td>${row.progress}%</td><td>${row.passed}</td></tr>`).join("")}
+          ${rows.length ? `<table class="table"><thead><tr><th>新人</th><th>登录账号</th><th>密码登记</th><th>阶段</th><th>学习进度</th><th>通过考试</th><th>操作</th></tr></thead><tbody>
+            ${rows.map(row => `<tr><td>${escapeHtml(row.account.display_name)}</td><td>${escapeHtml(row.account.username)}</td><td>${escapeHtml(row.account.password_text)}</td><td>${escapeHtml(row.account.level)}</td><td>${row.progress}%</td><td>${row.passed}</td><td><button class="btn red small" onclick="deleteLearnerAccount('${row.account.id}', '${escapeHtml(row.account.display_name)}')">删除</button></td></tr>`).join("")}
           </tbody></table>` : `<div class="empty">还没有创建新人账号。</div>`}
         </div>
       `;
@@ -1106,6 +2043,15 @@
         level
       });
       if (error) return alert(error.message || error);
+      renderPage();
+    }
+
+    async function deleteLearnerAccount(accountId, displayName) {
+      if (!confirm(`确定删除新人账号「${displayName}」吗？删除后，该新人的学习进度、考试记录、模拟实操和导师评分会一起删除。`)) return;
+      const { error } = await db().from("training_accounts").delete().eq("id", accountId).eq("role", "learner");
+      if (error) return alert(error.message || error);
+      if (state.selectedAccountId === accountId) state.selectedAccountId = null;
+      if (state.selectedPathAccountId === accountId) state.selectedPathAccountId = null;
       renderPage();
     }
 
