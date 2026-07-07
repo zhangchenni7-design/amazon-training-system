@@ -296,6 +296,15 @@
     .mind-node.teal { background: var(--teal-soft); color: #08765a; }
     .mind-node.purple { background: var(--purple-soft); color: #5538bf; }
     .mind-node.red { background: var(--red-soft); color: #af2f3e; }
+    .mind-map-image {
+      width: 100%;
+      max-height: 520px;
+      object-fit: contain;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: #fff;
+      margin-top: 14px;
+    }
     @media (max-width: 960px) {
       .login-shell, .app-shell, .split, .grid.cols-2, .grid.cols-3 { grid-template-columns: 1fr; }
       .login-card { margin: 0 20px 30px; }
@@ -1278,11 +1287,14 @@
       const progress = await getProgress();
       const { data: materials } = await db().from("training_course_materials").select("course_id");
       const { data: mindMap } = await db().from("training_system_settings").select("*").eq("key", "course_mind_map").maybeSingle();
+      const { data: mindMapImage } = await db().from("training_system_settings").select("*").eq("key", "course_mind_map_image").maybeSingle();
       const counts = {};
       (materials || []).forEach(item => counts[item.course_id] = (counts[item.course_id] || 0) + 1);
+      const imageInfo = parseSettingJson(mindMapImage?.value);
       page.innerHTML = `
         <div class="card" style="margin-bottom:16px;">
           <h3>学习思维导图</h3>
+          ${mindMapImageHtml(imageInfo)}
           ${mindMapHtml(mindMap?.value || "")}
           ${state.account.role === "admin" ? `
             <div class="field" style="margin-top:16px;">
@@ -1294,6 +1306,13 @@ L1 运营助理执行能力
 L2 运营专员自主推广">${escapeHtml(mindMap?.value || "")}</textarea>
             </div>
             <button class="btn orange" onclick="saveCourseMindMap()">保存思维导图</button>
+            <hr style="border:0;border-top:1px solid var(--line);margin:22px 0;">
+            <h3>思维导图图片</h3>
+            <div class="field"><label>图片链接</label><input id="courseMindMapImageUrl" value="${escapeHtml(imageInfo.url || "")}" placeholder="https://..." /></div>
+            <div class="field"><label>或上传本地图片</label><input id="courseMindMapImageFile" type="file" accept="image/*" /></div>
+            <p class="muted">可以上传 JPG、PNG、WebP 等图片。新人会在课程中心顶部直接看到。</p>
+            <button class="btn orange" onclick="saveCourseMindMapImage()">保存思维导图图片</button>
+            ${imageInfo.url ? `<button class="btn red" onclick="deleteCourseMindMapImage()">删除图片</button>` : ""}
           ` : ""}
         </div>
         <div class="toolbar">
@@ -1314,6 +1333,21 @@ L2 运营专员自主推广">${escapeHtml(mindMap?.value || "")}</textarea>
               </div>
             `;
           }).join("")}
+        </div>
+      `;
+    }
+
+    function parseSettingJson(value) {
+      if (!value) return {};
+      try { return JSON.parse(value) || {}; } catch { return { url: value }; }
+    }
+
+    function mindMapImageHtml(imageInfo = {}) {
+      if (!imageInfo.url) return "";
+      return `
+        <div>
+          <img class="mind-map-image" src="${escapeHtml(imageInfo.url)}" alt="学习思维导图图片" />
+          ${imageInfo.file_name ? `<p class="muted">图片：${escapeHtml(imageInfo.file_name)}</p>` : ""}
         </div>
       `;
     }
@@ -1339,6 +1373,35 @@ L2 运营专员自主推广">${escapeHtml(mindMap?.value || "")}</textarea>
       }, { onConflict: "key" });
       if (error) return alert(`保存失败：${error.message || error}。如果提示表不存在，请先运行 course-homework-upgrade.sql。`);
       alert("学习思维导图已保存，所有新人都会同步看到。");
+      renderPage();
+    }
+
+    async function saveCourseMindMapImage() {
+      const url = document.getElementById("courseMindMapImageUrl").value.trim();
+      const file = document.getElementById("courseMindMapImageFile").files[0];
+      if (!url && !file) return alert("请填写图片链接，或上传一张图片。");
+      try {
+        const fileData = await fileToData(file, "course-mind-map");
+        const imageInfo = fileData
+          ? { url: fileData.file_data, file_name: fileData.file_name, mime_type: fileData.mime_type }
+          : { url, file_name: "", mime_type: "" };
+        const { error } = await db().from("training_system_settings").upsert({
+          key: "course_mind_map_image",
+          value: JSON.stringify(imageInfo),
+          updated_at: new Date().toISOString()
+        }, { onConflict: "key" });
+        if (error) throw error;
+        alert("思维导图图片已保存，所有新人都会同步看到。");
+        renderPage();
+      } catch (error) {
+        alert(`保存失败：${error.message || error}。请确认 storage-upgrade.sql 已运行，且 training-files 文件仓库可用。`);
+      }
+    }
+
+    async function deleteCourseMindMapImage() {
+      if (!confirm("确定删除思维导图图片吗？删除后新人也看不到这张图。")) return;
+      const { error } = await db().from("training_system_settings").delete().eq("key", "course_mind_map_image");
+      if (error) return alert(error.message || error);
       renderPage();
     }
 
