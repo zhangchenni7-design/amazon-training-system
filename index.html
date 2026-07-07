@@ -273,6 +273,29 @@
     }
     .timer .time { font-size: 42px; font-weight: 900; margin: 8px 0; }
     .empty { padding: 24px; border: 1px dashed var(--line); border-radius: 20px; color: var(--muted); background: #fbfcfe; }
+    .mind-map {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+      margin-top: 14px;
+    }
+    .mind-node {
+      padding: 12px 14px;
+      border-radius: 18px;
+      background: var(--blue-soft);
+      color: #1b56cf;
+      font-weight: 800;
+      line-height: 1.5;
+    }
+    .mind-node.center {
+      background: linear-gradient(135deg, #ff9d55, #ff7420);
+      color: white;
+      box-shadow: 0 14px 35px rgba(255, 116, 32, .2);
+    }
+    .mind-node.teal { background: var(--teal-soft); color: #08765a; }
+    .mind-node.purple { background: var(--purple-soft); color: #5538bf; }
+    .mind-node.red { background: var(--red-soft); color: #af2f3e; }
     @media (max-width: 960px) {
       .login-shell, .app-shell, .split, .grid.cols-2, .grid.cols-3 { grid-template-columns: 1fr; }
       .login-card { margin: 0 20px 30px; }
@@ -1254,9 +1277,25 @@
       if (state.selectedCourseId) return renderCourseDetail(page, state.selectedCourseId);
       const progress = await getProgress();
       const { data: materials } = await db().from("training_course_materials").select("course_id");
+      const { data: mindMap } = await db().from("training_system_settings").select("*").eq("key", "course_mind_map").maybeSingle();
       const counts = {};
       (materials || []).forEach(item => counts[item.course_id] = (counts[item.course_id] || 0) + 1);
       page.innerHTML = `
+        <div class="card" style="margin-bottom:16px;">
+          <h3>学习思维导图</h3>
+          ${mindMapHtml(mindMap?.value || "")}
+          ${state.account.role === "admin" ? `
+            <div class="field" style="margin-top:16px;">
+              <label>主账号维护思维导图</label>
+              <textarea id="courseMindMap" placeholder="第一行写中心主题，后面每行写一个学习分支。例如：
+亚马逊运营成长路径
+L0 新人认知与红线
+L1 运营助理执行能力
+L2 运营专员自主推广">${escapeHtml(mindMap?.value || "")}</textarea>
+            </div>
+            <button class="btn orange" onclick="saveCourseMindMap()">保存思维导图</button>
+          ` : ""}
+        </div>
         <div class="toolbar">
           <span class="tag orange">资料由主账号统一维护</span>
           <span class="muted">新人打开后会看到同一套资料，进度按各自账号保存。</span>
@@ -1279,6 +1318,30 @@
       `;
     }
 
+    function mindMapHtml(value = "") {
+      const lines = String(value || "").split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+      if (!lines.length) return `<div class="empty">主账号还没有填写学习思维导图。</div>`;
+      const colors = ["teal", "purple", "red", "", "teal", "purple", "red"];
+      return `
+        <div class="mind-map">
+          <div class="mind-node center">${escapeHtml(lines[0])}</div>
+          ${lines.slice(1).map((line, index) => `<div class="mind-node ${colors[index % colors.length]}">${escapeHtml(line)}</div>`).join("")}
+        </div>
+      `;
+    }
+
+    async function saveCourseMindMap() {
+      const value = document.getElementById("courseMindMap").value.trim();
+      const { error } = await db().from("training_system_settings").upsert({
+        key: "course_mind_map",
+        value,
+        updated_at: new Date().toISOString()
+      }, { onConflict: "key" });
+      if (error) return alert(`保存失败：${error.message || error}。如果提示表不存在，请先运行 course-homework-upgrade.sql。`);
+      alert("学习思维导图已保存，所有新人都会同步看到。");
+      renderPage();
+    }
+
     function openCourse(courseId) {
       state.selectedCourseId = courseId;
       renderPage();
@@ -1299,6 +1362,14 @@
         .select("*")
         .eq("course_id", courseId)
         .order("created_at", { ascending: false });
+      const { data: homework } = await db()
+        .from("training_course_homework")
+        .select("*")
+        .eq("course_id", courseId)
+        .maybeSingle();
+      const { data: homeworkSubmissions } = state.account.role === "admin"
+        ? await db().from("training_course_homework_submissions").select("*, training_accounts(display_name, username)").eq("course_id", courseId).order("submitted_at", { ascending: false })
+        : await db().from("training_course_homework_submissions").select("*").eq("course_id", courseId).eq("account_id", state.account.id).order("submitted_at", { ascending: false });
       page.innerHTML = `
         <button class="btn ghost small" onclick="state.selectedCourseId=null; renderPage();">返回课程中心</button>
         <div class="split" style="margin-top:14px;">
@@ -1328,7 +1399,79 @@
             ` : ""}
           </div>
         </div>
+        ${courseHomeworkHtml(courseId, homework, homeworkSubmissions || [])}
       `;
+    }
+
+    function courseHomeworkHtml(courseId, homework, submissions = []) {
+      const content = (homework?.content || "").trim();
+      if (state.account.role === "admin") {
+        return `
+          <div class="grid cols-2" style="margin-top:16px;">
+            <div class="card">
+              <h3>课后作业布置</h3>
+              <p class="muted">这里写的作业会同步给所有新人，新人进入这门课程后就能看到并提交。</p>
+              <div class="field">
+                <label>作业内容</label>
+                <textarea id="courseHomeworkContent" placeholder="例如：学习完本课程后，请整理 3 条平台红线，并说明实际运营中如何避免。">${escapeHtml(content)}</textarea>
+              </div>
+              <button class="btn orange" onclick="saveCourseHomework('${courseId}')">保存作业</button>
+            </div>
+            <div class="card">
+              <h3>作业提交记录</h3>
+              ${homeworkSubmissionTable(submissions, true)}
+            </div>
+          </div>
+        `;
+      }
+      return `
+        <div class="grid cols-2" style="margin-top:16px;">
+          <div class="card">
+            <h3>课后作业</h3>
+            ${content ? `<p>${escapeHtml(content).replaceAll("\n", "<br>")}</p>` : `<div class="empty">主账号还没有布置这门课的作业。</div>`}
+          </div>
+          <div class="card">
+            <h3>提交作业</h3>
+            <div class="field"><label>作业说明</label><textarea id="homeworkAnswerText" placeholder="写一下你的作业说明、学习结论或操作复盘。"></textarea></div>
+            <div class="field"><label>作业链接</label><input id="homeworkAnswerUrl" placeholder="飞书/网盘/网页链接，选填" /></div>
+            <div class="field"><label>上传作业文件</label><input id="homeworkAnswerFile" type="file" /></div>
+            <button class="btn orange" onclick="submitCourseHomework('${courseId}')">提交作业</button>
+          </div>
+        </div>
+        <div class="card" style="margin-top:16px;">
+          <h3>我的提交记录</h3>
+          ${homeworkSubmissionTable(submissions, false)}
+        </div>
+      `;
+    }
+
+    function homeworkSubmissionTable(submissions = [], isAdmin = false) {
+      if (!submissions.length) return `<div class="empty">${isAdmin ? "还没有新人提交作业。" : "你还没有提交作业。"}</div>`;
+      return `
+        <table class="table">
+          <thead><tr>${isAdmin ? "<th>新人</th>" : ""}<th>说明</th><th>附件/链接</th><th>成绩</th><th>导师反馈</th><th>提交时间</th>${isAdmin ? "<th>操作</th>" : ""}</tr></thead>
+          <tbody>
+            ${submissions.map(item => `
+              <tr>
+                ${isAdmin ? `<td>${escapeHtml(item.training_accounts?.display_name || item.training_accounts?.username || "-")}</td>` : ""}
+                <td>${escapeHtml(item.answer_text || "-")}</td>
+                <td>${homeworkSubmissionLinkHtml(item)}</td>
+                <td>${item.score ?? "待评分"}</td>
+                <td>${escapeHtml(item.mentor_note || "-")}</td>
+                <td>${formatDate(item.submitted_at)}</td>
+                ${isAdmin ? `<td><button class="btn blue small" onclick="reviewHomeworkSubmission('${item.id}')">评分/反馈</button></td>` : ""}
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      `;
+    }
+
+    function homeworkSubmissionLinkHtml(item) {
+      const links = [];
+      if (item.answer_url) links.push(`<a class="btn ghost small" href="${escapeHtml(item.answer_url)}" target="_blank">打开链接</a>`);
+      if (item.answer_file_data) links.push(`<a class="btn ghost small" href="${escapeHtml(item.answer_file_data)}" target="_blank" download="${escapeHtml(item.answer_file_name || "homework")}">下载文件</a>`);
+      return links.length ? `<div class="toolbar" style="margin:0;">${links.join("")}</div>` : "-";
     }
 
     function materialHtml(material) {
@@ -1385,6 +1528,59 @@
       } catch (error) {
         alert(error.message || error);
       }
+    }
+
+    async function saveCourseHomework(courseId) {
+      const content = document.getElementById("courseHomeworkContent").value.trim();
+      const { error } = await db().from("training_course_homework").upsert({
+        course_id: courseId,
+        content,
+        updated_by: state.account.id,
+        updated_at: new Date().toISOString()
+      }, { onConflict: "course_id" });
+      if (error) return alert(`保存失败：${error.message || error}。如果提示表不存在，请先运行 course-homework-upgrade.sql。`);
+      alert("课后作业已保存，所有新人会同步看到。");
+      renderPage();
+    }
+
+    async function submitCourseHomework(courseId) {
+      const answerText = document.getElementById("homeworkAnswerText").value.trim();
+      const answerUrl = document.getElementById("homeworkAnswerUrl").value.trim();
+      const file = document.getElementById("homeworkAnswerFile").files[0];
+      if (!answerText && !answerUrl && !file) return alert("请填写作业说明、链接，或上传一个作业文件。");
+      try {
+        const fileData = await fileToData(file, `course-homework/${courseId}/${state.account.id}`);
+        const { error } = await db().from("training_course_homework_submissions").insert({
+          account_id: state.account.id,
+          course_id: courseId,
+          answer_text: answerText,
+          answer_url: answerUrl || null,
+          answer_file_name: fileData?.file_name || null,
+          answer_mime_type: fileData?.mime_type || null,
+          answer_file_data: fileData?.file_data || null,
+          submitted_at: new Date().toISOString()
+        });
+        if (error) throw error;
+        alert("作业已提交，主账号可以在这门课程里查看。");
+        renderPage();
+      } catch (error) {
+        alert(`提交失败：${error.message || error}。如果提示表不存在，请先运行 course-homework-upgrade.sql。`);
+      }
+    }
+
+    async function reviewHomeworkSubmission(submissionId) {
+      const scoreText = prompt("请输入作业成绩（0-100，可留空表示待评分）：");
+      if (scoreText === null) return;
+      const note = prompt("请输入导师反馈（可留空）：") || "";
+      const score = scoreText.trim() === "" ? null : Number(scoreText);
+      if (score !== null && (Number.isNaN(score) || score < 0 || score > 100)) return alert("成绩请输入 0-100。");
+      const { error } = await db().from("training_course_homework_submissions").update({
+        score,
+        mentor_note: note.trim(),
+        reviewed_at: new Date().toISOString()
+      }).eq("id", submissionId);
+      if (error) return alert(error.message || error);
+      renderPage();
     }
 
     async function downloadData(materialId) {
@@ -1835,7 +2031,7 @@
       } else {
         const { data: freshAccount } = await db().from("training_accounts").select("*").eq("id", state.account.id).maybeSingle();
         state.account = freshAccount || state.account;
-        sessionStorage.setItem("apolloTrainingAccount", JSON.stringify(state.account));
+        sessionStorage.setItem("apollo-db-account", JSON.stringify(state.account));
         learners = [state.account];
       }
       const selected = state.account.role === "admin" ? (state.selectedAccountId || learners[0]?.id) : state.account.id;
