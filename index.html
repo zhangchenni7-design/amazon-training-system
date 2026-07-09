@@ -791,6 +791,12 @@
         const { data: pendingScores } = await db().from("training_exam_records").select("id").is("score", null);
         const { data: practiceTasks } = await db().from("training_practice_tasks").select("id, score");
         const { data: mentorScores } = await db().from("training_mentor_scores").select("account_id");
+        const { data: pendingHomework } = await db()
+          .from("training_course_homework_submissions")
+          .select("*, training_accounts(display_name, username)")
+          .is("score", null)
+          .order("submitted_at", { ascending: false })
+          .limit(8);
         const pendingPracticeCount = (practiceTasks || []).filter(task => task.score == null).length;
         const mentorAccountIds = new Set((mentorScores || []).map(item => item.account_id));
         const noMentorCount = learners.filter(account => !mentorAccountIds.has(account.id)).length;
@@ -809,6 +815,7 @@
             <div class="card">
               <h3>待处理</h3>
               <p>待评分考试：<b>${(pendingScores || []).length}</b></p>
+              <p>待处理作业：<b>${(pendingHomework || []).length}</b></p>
               <p>待评分实操：<b>${pendingPracticeCount}</b></p>
               <p>未填下一步动作：<b>${noNextActionCount}</b></p>
             </div>
@@ -821,6 +828,25 @@
               <div class="stat">${noMentorCount}</div>
               <p>新人还没有导师评分记录。</p>
             </div>
+          </div>
+
+          <div class="card" style="margin-top:16px;">
+            <h3>新提交作业</h3>
+            ${(pendingHomework || []).length ? `<table class="table">
+              <thead><tr><th>新人</th><th>课程</th><th>作业说明</th><th>提交时间</th><th>处理</th></tr></thead>
+              <tbody>
+                ${(pendingHomework || []).map(item => {
+                  const course = getCourse(item.course_id);
+                  return `<tr>
+                    <td>${escapeHtml(item.training_accounts?.display_name || item.training_accounts?.username || "-")}</td>
+                    <td>${course ? `${escapeHtml(course.level)} · ${escapeHtml(course.title)}` : escapeHtml(item.course_id)}</td>
+                    <td>${escapeHtml(item.answer_text || item.answer_url || item.answer_file_name || "-")}</td>
+                    <td>${formatDate(item.submitted_at)}</td>
+                    <td><button class="btn blue small" onclick="openCourseFromDashboard('${item.course_id}')">去处理</button></td>
+                  </tr>`;
+                }).join("")}
+              </tbody>
+            </table>` : `<div class="empty">暂无待处理作业。</div>`}
           </div>
 
           <div class="grid cols-2" style="margin-top:16px;">
@@ -1411,6 +1437,12 @@ L2 运营专员自主推广">${escapeHtml(mindMap?.value || "")}</textarea>
     }
 
     function openCourseFromPath(courseId) {
+      state.page = "courses";
+      state.selectedCourseId = courseId;
+      renderApp();
+    }
+
+    function openCourseFromDashboard(courseId) {
       state.page = "courses";
       state.selectedCourseId = courseId;
       renderApp();
