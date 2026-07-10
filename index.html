@@ -305,6 +305,33 @@
       background: #fff;
       margin-top: 14px;
     }
+    .timeline {
+      display: flex;
+      gap: 14px;
+      overflow-x: auto;
+      padding: 10px 4px 4px;
+    }
+    .timeline-item {
+      min-width: 220px;
+      border-top: 4px solid var(--orange);
+      border-radius: 14px;
+      background: #fbfcfe;
+      padding: 12px;
+      border-left: 1px solid var(--line);
+      border-right: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+    }
+    .short-board {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .short-card {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 14px;
+      background: #fbfcfe;
+    }
     @media (max-width: 960px) {
       .login-shell, .app-shell, .split, .grid.cols-2, .grid.cols-3 { grid-template-columns: 1fr; }
       .login-card { margin: 0 20px 30px; }
@@ -786,15 +813,103 @@
       const progress = await getProgress();
       const average = avgProgress(progress);
       const { data: records } = await db().from("training_exam_records").select("*").eq("account_id", state.account.id).order("submitted_at", { ascending: false });
+      const homeworkList = await safeData(db().from("training_course_homework").select("*"), []);
+      const homeworkSubmissions = await safeData(db().from("training_course_homework_submissions").select("*").eq("account_id", state.account.id).order("submitted_at", { ascending: false }), []);
+      const practiceTasks = await safeData(db().from("training_practice_tasks").select("*").eq("account_id", state.account.id).order("updated_at", { ascending: false }), []);
+      const mentorScores = await safeData(db().from("training_mentor_scores").select("*").eq("account_id", state.account.id).order("updated_at", { ascending: false }), []);
+      const completedCourses = courses.filter(course => Number(progress.get(course.id) || 0) >= 80).length;
+      const passedExams = (records || []).filter(record => record.passed).length;
+      const submittedHomeworkCourseIds = new Set((homeworkSubmissions || []).map(item => item.course_id));
+      const pendingHomeworkCount = (homeworkList || []).filter(homework => String(homework.content || "").trim() && !submittedHomeworkCourseIds.has(homework.course_id)).length;
+      const waitingHomeworkCount = (homeworkSubmissions || []).filter(item => item.score == null).length;
+      const pendingExamCount = exams.filter(exam => !(records || []).some(record => record.exam_id === exam.id && record.passed)).length;
+      const waitingExamCount = (records || []).filter(record => record.score == null).length;
+      const mentorAvg = mentorScores.length ? Math.round(mentorScores.reduce((sum, item) => sum + Number(item.score || 0), 0) / mentorScores.length) : null;
+      const latestHomeworkFeedback = (homeworkSubmissions || []).find(item => item.score != null || item.mentor_note);
+      const latestPracticeFeedback = (practiceTasks || []).find(item => item.score != null || item.mentor_note);
+      const latestMentorScore = (mentorScores || [])[0];
+      const latestExam = (records || [])[0];
+      const abilityGroups = mentorCapabilityTree.map(group => {
+        const groupScores = (mentorScores || []).filter(score => splitMentorAbility(score.ability).block === group.block);
+        const avg = groupScores.length ? Math.round(groupScores.reduce((sum, item) => sum + Number(item.score || 0), 0) / groupScores.length) : null;
+        return { ...group, avg };
+      }).filter(group => group.avg != null).sort((a, b) => a.avg - b.avg).slice(0, 2);
+      const weaknessAdvice = group => {
+        const advice = {
+          "规则认知与风险意识": "优先复盘账号安全、平台红线和 FBA 流程，操作前先确认风险边界。",
+          "运营基础执行能力": "建议多练 Listing、Case、A+、促销和表格规范，先把后台动作做稳。",
+          "客服售后处理能力": "建议补充邮件回复、退款补发和异常闭环 SOP，注意语气和处理时效。",
+          "数据经营分析能力": "建议强化销售报表、广告报表、利润表和补货表，先学会判断问题来源。",
+          "广告推广与链接操盘": "建议先补 SP/SB/SD 基础、广告结构和关键词投放，再做链接诊断。"
+        };
+        return advice[group.block] || "建议结合导师记录，优先补齐这个能力板块的课程和作业。";
+      };
+      const timelineItems = [
+        ...(homeworkSubmissions || []).map(item => ({ time: item.submitted_at, title: "提交作业", desc: `${getCourse(item.course_id)?.title || item.course_id}${item.score != null ? ` · ${item.score}分` : " · 待反馈"}` })),
+        ...(records || []).map(item => ({ time: item.submitted_at, title: "理论考试", desc: `${item.exam_title} · ${item.score ?? "待评分"}` })),
+        ...(practiceTasks || []).map(item => ({ time: item.updated_at, title: "模拟实操", desc: `${item.title} · ${item.score ?? "待评分"}` })),
+        ...(mentorScores || []).map(item => ({ time: item.updated_at, title: "导师评分", desc: `${splitMentorAbility(item.ability).block} · ${item.score}分` }))
+      ].filter(item => {
+        if (!item.time) return false;
+        return Date.now() - new Date(item.time).getTime() <= 7 * 24 * 60 * 60 * 1000;
+      }).sort((a, b) => new Date(b.time) - new Date(a.time)).slice(0, 10);
       page.innerHTML = `
         <div class="grid cols-3">
-          <div class="card"><h3>当前阶段</h3><div class="stat">${escapeHtml(state.account.level)}</div><p>L0 认知，L1 执行，L2 推广。</p></div>
-          <div class="card"><h3>学习进度</h3><div class="stat">${average}%</div><div class="progress"><i style="width:${average}%"></i></div></div>
-          <div class="card"><h3>考试记录</h3><div class="stat">${(records || []).length}</div><p>作答和成绩会保存。</p></div>
+          <div class="card"><h3>当前阶段</h3><div class="stat">${escapeHtml(state.account.level)}</div><p>${escapeHtml(state.account.display_name || state.account.username)}</p></div>
+          <div class="card"><h3>总课程进度</h3><div class="stat">${average}%</div><div class="progress"><i style="width:${average}%"></i></div></div>
+          <div class="card"><h3>导师评分均分</h3><div class="stat">${mentorAvg == null ? "-" : mentorAvg}</div><p>${mentorAvg == null ? "等待导师评分" : "来自导师能力评分记录"}</p></div>
         </div>
+
+        <div class="grid cols-3" style="margin-top:16px;">
+          <div class="card"><h3>已完成课程</h3><div class="stat">${completedCourses}/${courses.length}</div><p>课程进度达到 80% 计为完成。</p></div>
+          <div class="card"><h3>已提交作业</h3><div class="stat">${(homeworkSubmissions || []).length}</div><p>包含待反馈和已评分作业。</p></div>
+          <div class="card"><h3>已通过考试</h3><div class="stat">${passedExams}</div><p>通过线按考试设置计算。</p></div>
+        </div>
+
         <div class="card" style="margin-top:16px;">
-          <h3>下一步</h3>
-          <p>进入「培养路径」查看当前任务，按课程资料、考试、模拟实操推进。</p>
+          <h3>待处理清单</h3>
+          <div class="grid cols-3">
+            <div><b>待提交作业</b><div class="stat">${pendingHomeworkCount}</div><button class="btn ghost small" onclick="go('path')">去查看</button></div>
+            <div><b>已提交待反馈</b><div class="stat">${waitingHomeworkCount}</div><button class="btn ghost small" onclick="go('path')">去查看</button></div>
+            <div><b>待完成考试</b><div class="stat">${pendingExamCount}</div><button class="btn ghost small" onclick="go('exams')">去考试</button></div>
+          </div>
+          <div class="grid cols-2" style="margin-top:14px;">
+            <div><b>待评分考试</b><div class="stat">${waitingExamCount}</div></div>
+            <div><b>待完成模拟实操</b><div class="stat">${(practiceTasks || []).filter(item => item.score == null).length}</div></div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:16px;">
+          <h3>导师反馈墙</h3>
+          <div class="grid cols-2">
+            <div class="short-card"><b>综合评价</b><p>${state.account.mentor_overall_note ? escapeHtml(state.account.mentor_overall_note) : "导师还没有填写综合评价。"}</p></div>
+            <div class="short-card"><b>最新作业反馈</b><p>${latestHomeworkFeedback ? `${latestHomeworkFeedback.score ?? "待评分"}分 · ${escapeHtml(latestHomeworkFeedback.mentor_note || "暂无文字反馈")}` : "暂无作业反馈。"}</p></div>
+            <div class="short-card"><b>最新实操反馈</b><p>${latestPracticeFeedback ? `${latestPracticeFeedback.score ?? "待评分"}分 · ${escapeHtml(latestPracticeFeedback.mentor_note || latestPracticeFeedback.title || "")}` : "暂无实操反馈。"}</p></div>
+            <div class="short-card"><b>最新导师评分</b><p>${latestMentorScore ? `${escapeHtml(splitMentorAbility(latestMentorScore.ability).block)} · ${latestMentorScore.score}分` : "暂无导师评分。"}</p></div>
+            <div class="short-card"><b>最新考试结果</b><p>${latestExam ? `${escapeHtml(latestExam.exam_title)} · ${latestExam.score ?? "待评分"}` : "暂无考试记录。"}</p></div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:16px;">
+          <h3>我的能力短板</h3>
+          ${abilityGroups.length ? `<div class="short-board">${abilityGroups.map(group => `
+            <div class="short-card">
+              <span class="tag ${group.color}">${escapeHtml(group.block)}</span>
+              <div class="stat">${group.avg}</div>
+              <p>${escapeHtml(weaknessAdvice(group))}</p>
+            </div>
+          `).join("")}</div>` : `<div class="empty">还没有足够的导师评分，暂时无法识别能力短板。</div>`}
+        </div>
+
+        <div class="card" style="margin-top:16px;">
+          <h3>最近 7 天学习动态</h3>
+          ${timelineItems.length ? `<div class="timeline">${timelineItems.map(item => `
+            <div class="timeline-item">
+              <b>${escapeHtml(item.title)}</b>
+              <p>${escapeHtml(item.desc)}</p>
+              <div class="muted">${formatDate(item.time)}</div>
+            </div>
+          `).join("")}</div>` : `<div class="empty">最近 7 天还没有新的学习动态。</div>`}
         </div>
       `;
     }
