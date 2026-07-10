@@ -952,6 +952,12 @@
       const { data: practiceTasks } = await db().from("training_practice_tasks").select("*").eq("account_id", selectedAccount.id);
       const { data: mentorScores } = await db().from("training_mentor_scores").select("*").eq("account_id", selectedAccount.id);
       const { data: allMaterials } = await db().from("training_course_materials").select("*").order("created_at", { ascending: false });
+      const { data: allHomework } = await db().from("training_course_homework").select("*");
+      const { data: homeworkSubmissions } = await db()
+        .from("training_course_homework_submissions")
+        .select("*")
+        .eq("account_id", selectedAccount.id)
+        .order("submitted_at", { ascending: false });
       const passedExamIds = new Set((records || []).filter(record => record.passed).map(record => record.exam_id));
       const latestRecordByExam = new Map();
       (records || []).forEach(record => {
@@ -1247,11 +1253,61 @@
 
       const currentLevelCourses = courses.filter(course => course.level === selectedAccount.level);
       const currentLevelCourseIds = new Set(currentLevelCourses.map(course => course.id));
-      const currentLevelMaterials = (allMaterials || []).filter(material => currentLevelCourseIds.has(material.course_id));
-      const nextCourseMaterials = nextCourse ? (allMaterials || []).filter(material => material.course_id === nextCourse.id) : [];
-      const materialLink = material => material.kind === "link"
-        ? `<a class="btn ghost small" href="${escapeHtml(material.url || "#")}" target="_blank">打开</a>`
-        : `<button class="btn ghost small" onclick="downloadData('${material.id}')">下载</button>`;
+      const materialCountsByCourse = {};
+      (allMaterials || []).forEach(material => {
+        materialCountsByCourse[material.course_id] = (materialCountsByCourse[material.course_id] || 0) + 1;
+      });
+      const homeworkByCourse = new Map((allHomework || [])
+        .filter(homework => String(homework.content || "").trim())
+        .map(homework => [homework.course_id, homework]));
+      const latestHomeworkSubmissionByCourse = new Map();
+      (homeworkSubmissions || []).forEach(submission => {
+        const existing = latestHomeworkSubmissionByCourse.get(submission.course_id);
+        if (!existing || new Date(submission.submitted_at || 0) > new Date(existing.submitted_at || 0)) {
+          latestHomeworkSubmissionByCourse.set(submission.course_id, submission);
+        }
+      });
+      const homeworkStatusText = courseId => {
+        const homework = homeworkByCourse.get(courseId);
+        if (!homework) return "未布置";
+        const submission = latestHomeworkSubmissionByCourse.get(courseId);
+        if (!submission) return "待提交";
+        if (submission.score == null) return "已提交待反馈";
+        return `已完成 ${submission.score}分`;
+      };
+      const unfinishedHomeworkRows = courses
+        .filter(course => homeworkByCourse.has(course.id))
+        .map(course => ({
+          course,
+          homework: homeworkByCourse.get(course.id),
+          submission: latestHomeworkSubmissionByCourse.get(course.id)
+        }))
+        .filter(item => !item.submission || item.submission.score == null)
+        .sort((a, b) => {
+          const aCurrent = currentLevelCourseIds.has(a.course.id) ? 0 : 1;
+          const bCurrent = currentLevelCourseIds.has(b.course.id) ? 0 : 1;
+          return aCurrent - bCurrent;
+        })
+        .map(item => `
+          <tr>
+            <td><span class="tag ${item.course.level === "L0" ? "orange" : item.course.level === "L1" ? "teal" : "purple"}">${item.course.level}</span>${escapeHtml(item.course.title)}</td>
+            <td>${item.submission ? "已提交待反馈" : "待提交"}</td>
+            <td>${escapeHtml(String(item.homework.content || "").slice(0, 60))}${String(item.homework.content || "").length > 60 ? "..." : ""}</td>
+            <td><button class="btn orange small" onclick="openCourseFromPath('${item.course.id}')">去完成</button></td>
+          </tr>
+        `).join("");
+      const currentStageTaskRows = currentLevelCourses.map(course => {
+        const courseProgress = Number(progress.get(course.id) || 0);
+        return `
+          <tr>
+            <td>${escapeHtml(course.title)}</td>
+            <td>${courseProgress}%<div class="progress"><i style="width:${courseProgress}%"></i></div></td>
+            <td>${materialCountsByCourse[course.id] || 0} 份</td>
+            <td>${homeworkStatusText(course.id)}</td>
+            <td><button class="btn ghost small" onclick="openCourseFromPath('${course.id}')">进入</button></td>
+          </tr>
+        `;
+      }).join("");
       const learnerExamRows = exams.map(exam => {
         const record = latestRecordByExam.get(exam.id);
         const status = record?.passed ? "已通过" : record?.score != null ? "未通过" : record ? "待评分" : "待完成";
@@ -1271,13 +1327,15 @@
         </div>
         <div class="grid cols-2" style="margin-top:16px;">
           <div class="card">
-            <h3>下一门课程资料</h3>
-            ${nextCourse ? `<p class="muted">${escapeHtml(nextCourse.level)} · ${escapeHtml(nextCourse.title)}</p>` : `<p class="muted">当前课程进度已基本完成。</p>`}
-            ${nextCourseMaterials.length ? nextCourseMaterials.slice(0, 5).map(material => `<div class="material-row"><div><b>${escapeHtml(material.title)}</b><div class="muted">${escapeHtml(getCourse(material.course_id)?.title || "")}</div></div>${materialLink(material)}</div>`).join("") : `<div class="empty">暂无资料。</div>`}
+            <h3>未完成作业</h3>
+            ${unfinishedHomeworkRows ? `<table class="table"><thead><tr><th>课程</th><th>状态</th><th>作业要求</th><th>操作</th></tr></thead><tbody>${unfinishedHomeworkRows}</tbody></table>` : `<div class="empty">当前没有未完成作业。</div>`}
           </div>
           <div class="card">
-            <h3>当前阶段资料</h3>
-            ${currentLevelMaterials.length ? currentLevelMaterials.slice(0, 8).map(material => `<div class="material-row"><div><b>${escapeHtml(material.title)}</b><div class="muted">${escapeHtml(getCourse(material.course_id)?.title || "")}</div></div>${materialLink(material)}</div>`).join("") : `<div class="empty">当前阶段暂无资料。</div>`}
+            <h3>当前阶段任务包</h3>
+            <table class="table">
+              <thead><tr><th>课程</th><th>进度</th><th>资料</th><th>作业</th><th>进入</th></tr></thead>
+              <tbody>${currentStageTaskRows}</tbody>
+            </table>
           </div>
         </div>
         <div class="grid cols-2" style="margin-top:16px;">
