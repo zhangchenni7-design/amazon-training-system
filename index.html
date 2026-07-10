@@ -393,6 +393,20 @@
       return state.db;
     }
 
+    async function safeData(request, fallback = []) {
+      try {
+        const { data, error } = await request;
+        if (error) {
+          console.warn("读取线上数据失败", error);
+          return fallback;
+        }
+        return data || fallback;
+      } catch (error) {
+        console.warn("读取线上数据异常", error);
+        return fallback;
+      }
+    }
+
     function escapeHtml(value = "") {
       return String(value)
         .replaceAll("&", "&amp;")
@@ -641,13 +655,25 @@
     async function renderPage() {
       const page = document.getElementById("page");
       page.innerHTML = `<div class="empty">正在读取线上数据...</div>`;
-      if (state.page === "dashboard") return renderDashboard(page);
-      if (state.page === "path") return renderPath(page);
-      if (state.page === "courses") return renderCourses(page);
-      if (state.page === "exams") return renderExams(page);
-      if (state.page === "practice") return renderPractice(page);
-      if (state.page === "mentor") return renderMentor(page);
-      if (state.page === "accounts") return renderAccounts(page);
+      try {
+        if (state.page === "dashboard") return await renderDashboard(page);
+        if (state.page === "path") return await renderPath(page);
+        if (state.page === "courses") return await renderCourses(page);
+        if (state.page === "exams") return await renderExams(page);
+        if (state.page === "practice") return await renderPractice(page);
+        if (state.page === "mentor") return await renderMentor(page);
+        if (state.page === "accounts") return await renderAccounts(page);
+      } catch (error) {
+        console.error(error);
+        page.innerHTML = `
+          <div class="card">
+            <h3>读取失败</h3>
+            <p class="muted">页面读取线上数据时遇到问题，请先刷新页面。如果仍失败，把下面这段错误发给管理员。</p>
+            <div class="notice">${escapeHtml(error.message || error)}</div>
+            <button class="btn orange" onclick="renderPage()">重新读取</button>
+          </div>
+        `;
+      }
     }
 
     async function getProgress(accountId = state.account.id) {
@@ -952,12 +978,12 @@
       const { data: practiceTasks } = await db().from("training_practice_tasks").select("*").eq("account_id", selectedAccount.id);
       const { data: mentorScores } = await db().from("training_mentor_scores").select("*").eq("account_id", selectedAccount.id);
       const { data: allMaterials } = await db().from("training_course_materials").select("*").order("created_at", { ascending: false });
-      const { data: allHomework } = await db().from("training_course_homework").select("*");
-      const { data: homeworkSubmissions } = await db()
+      const allHomework = await safeData(db().from("training_course_homework").select("*"), []);
+      const homeworkSubmissions = await safeData(db()
         .from("training_course_homework_submissions")
         .select("*")
         .eq("account_id", selectedAccount.id)
-        .order("submitted_at", { ascending: false });
+        .order("submitted_at", { ascending: false }), []);
       const passedExamIds = new Set((records || []).filter(record => record.passed).map(record => record.exam_id));
       const latestRecordByExam = new Map();
       (records || []).forEach(record => {
