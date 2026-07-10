@@ -1203,6 +1203,12 @@
       const { data: practiceTasks } = await db().from("training_practice_tasks").select("*").eq("account_id", selectedAccount.id);
       const { data: mentorScores } = await db().from("training_mentor_scores").select("*").eq("account_id", selectedAccount.id);
       const { data: allMaterials } = await db().from("training_course_materials").select("*").order("created_at", { ascending: false });
+      const allHomework = await safeData(db().from("training_course_homework").select("*"), []);
+      const homeworkSubmissions = await safeData(db()
+        .from("training_course_homework_submissions")
+        .select("*")
+        .eq("account_id", selectedAccount.id)
+        .order("submitted_at", { ascending: false }), []);
 
       const passedExamIds = new Set((records || []).filter(record => record.passed).map(record => record.exam_id));
       const latestRecordByExam = new Map();
