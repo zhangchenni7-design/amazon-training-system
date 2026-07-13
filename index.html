@@ -797,9 +797,9 @@
             <div class="card">
               <h3>最近考试记录</h3>
               ${(records || []).length ? `<table class="table">
-                <thead><tr><th>新人</th><th>考试</th><th>成绩</th><th>状态</th><th>上传时间</th></tr></thead>
+                <thead><tr><th>新人</th><th>考试</th><th>成绩</th><th>状态</th><th>作答</th><th>上传时间</th></tr></thead>
                 <tbody>
-                  ${records.map(record => `<tr><td>${escapeHtml(record.training_accounts?.display_name || record.training_accounts?.username || "-")}</td><td>${escapeHtml(record.exam_title)}</td><td>${record.score ?? "待评分"}</td><td>${record.score == null ? "待评分" : record.passed ? "已通过" : "未通过"}</td><td>${formatDate(record.submitted_at)}</td></tr>`).join("")}
+                  ${records.map(record => `<tr><td>${escapeHtml(record.training_accounts?.display_name || record.training_accounts?.username || "-")}</td><td>${escapeHtml(record.exam_title)}</td><td>${record.score ?? "待评分"}</td><td>${record.score == null ? "待评分" : record.passed ? "已通过" : "未通过"}</td><td>${answerLinkHtml(record)}</td><td>${formatDate(record.submitted_at)}</td></tr>`).join("")}
                 </tbody>
               </table>` : `<div class="empty">还没有考试记录。</div>`}
             </div>
@@ -1000,9 +1000,9 @@
             <div class="card">
               <h3>最近考试记录</h3>
               ${(records || []).length ? `<table class="table">
-                <thead><tr><th>新人</th><th>考试</th><th>成绩</th><th>状态</th><th>上传时间</th></tr></thead>
+                <thead><tr><th>新人</th><th>考试</th><th>成绩</th><th>状态</th><th>作答</th><th>上传时间</th></tr></thead>
                 <tbody>
-                  ${records.map(record => `<tr><td>${escapeHtml(record.training_accounts?.display_name || record.training_accounts?.username || "-")}</td><td>${escapeHtml(record.exam_title)}</td><td>${record.score ?? "待评分"}</td><td>${record.score == null ? "待评分" : record.passed ? "已通过" : "未通过"}</td><td>${formatDate(record.submitted_at)}</td></tr>`).join("")}
+                  ${records.map(record => `<tr><td>${escapeHtml(record.training_accounts?.display_name || record.training_accounts?.username || "-")}</td><td>${escapeHtml(record.exam_title)}</td><td>${record.score ?? "待评分"}</td><td>${record.score == null ? "待评分" : record.passed ? "已通过" : "未通过"}</td><td>${answerLinkHtml(record)}</td><td>${formatDate(record.submitted_at)}</td></tr>`).join("")}
                 </tbody>
               </table>` : `<div class="empty">还没有考试记录。</div>`}
             </div>
