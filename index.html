@@ -1453,6 +1453,35 @@
       }).join("");
 
       if (state.account.role === "admin") {
+        const adminHomeworkByCourse = new Map((allHomework || [])
+          .filter(homework => String(homework.content || "").trim())
+          .map(homework => [homework.course_id, homework]));
+        const adminLatestHomeworkByCourse = new Map();
+        (homeworkSubmissions || []).forEach(submission => {
+          const existing = adminLatestHomeworkByCourse.get(submission.course_id);
+          if (!existing || new Date(submission.submitted_at || 0) > new Date(existing.submitted_at || 0)) {
+            adminLatestHomeworkByCourse.set(submission.course_id, submission);
+          }
+        });
+        const homeworkOverviewRows = courses
+          .filter(course => adminHomeworkByCourse.has(course.id))
+          .map(course => {
+            const submission = adminLatestHomeworkByCourse.get(course.id);
+            const status = !submission ? "待提交" : (submission.score != null || String(submission.mentor_note || "").trim()) ? "已反馈" : "待评分";
+            const statusClass = status === "已反馈" ? "teal" : status === "待评分" ? "orange" : "";
+            return `
+              <tr>
+                <td><span class="tag ${course.level === "L0" ? "orange" : course.level === "L1" ? "teal" : "purple"}">${course.level}</span></td>
+                <td>${escapeHtml(course.title)}</td>
+                <td>${submission ? homeworkOverviewLinkHtml(submission) : "-"}</td>
+                <td>${submission ? formatDate(submission.submitted_at) : "-"}</td>
+                <td>${submission?.score ?? "-"}</td>
+                <td>${escapeHtml(submission?.mentor_note || "-")}</td>
+                <td><span class="tag ${statusClass}">${status}</span></td>
+              </tr>
+            `;
+          }).join("");
+
         page.innerHTML = `
           <div class="card" style="margin-bottom:16px;">
             <h3>选择新人</h3>
@@ -1481,6 +1510,13 @@
               <thead><tr><th>阶段</th><th>培养重点</th><th>课程</th><th>考试</th><th>实操</th><th>导师</th></tr></thead>
               <tbody>${stageRows}</tbody>
             </table>
+          </div>
+          <div class="card" style="margin-top:16px;">
+            <h3>作业进度总览</h3>
+            ${homeworkOverviewRows ? `<table class="table">
+              <thead><tr><th>阶段</th><th>课程板块</th><th>作业文档/链接</th><th>提交时间</th><th>成绩</th><th>导师反馈</th><th>状态</th></tr></thead>
+              <tbody>${homeworkOverviewRows}</tbody>
+            </table>` : `<div class="empty">当前还没有布置课程作业。</div>`}
           </div>
         `;
         return;
@@ -1860,6 +1896,12 @@ L2 运营专员自主推广">${escapeHtml(mindMap?.value || "")}</textarea>
       if (item.answer_url) links.push(`<a class="btn ghost small" href="${escapeHtml(item.answer_url)}" target="_blank">打开链接</a>`);
       if (item.answer_file_data) links.push(`<a class="btn ghost small" href="${escapeHtml(item.answer_file_data)}" target="_blank" download="${escapeHtml(item.answer_file_name || "homework")}">下载文件</a>`);
       return links.length ? `<div class="toolbar" style="margin:0;">${links.join("")}</div>` : "-";
+    }
+
+    function homeworkOverviewLinkHtml(item) {
+      const linkHtml = homeworkSubmissionLinkHtml(item);
+      if (linkHtml !== "-") return linkHtml;
+      return item.answer_text ? "已提交文字说明" : "-";
     }
 
     function materialHtml(material) {
