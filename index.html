@@ -378,6 +378,12 @@
       { id: "assistant-final", title: "亚马逊运营助理综合测试", minutes: 90, pass: 80 }
     ];
 
+    const defaultExamInstruction = `选择题:一共13题(每题2分)
+简单解答题&判断题:一共7题(每题2分)
+其余解答题:一共18题(每题3分)
+39-41题:一共3题(每题8+8+10分)
+满分：120`;
+
     const mentorCapabilityTree = [
       { block: "规则认知与风险意识", color: "orange", items: ["平台规则理解", "账号安全红线", "FBA流程认知", "后台权限边界"] },
       { block: "运营基础执行能力", color: "teal", items: ["Listing基础操作", "Case处理", "A+与变体操作", "促销设置", "表格规范"] },
@@ -2042,14 +2048,19 @@ L2 运营专员自主推广">${escapeHtml(mindMap?.value || "")}</textarea>
 
     async function renderExams(page) {
       const { data: configs } = await db().from("training_exam_configs").select("*").order("exam_id");
+      const instructionRows = await safeData(db().from("training_system_settings").select("*").like("key", "exam_instruction_%"), []);
       const { data: records } = state.account.role === "admin"
         ? await db().from("training_exam_records").select("*, training_accounts(display_name, username)").order("submitted_at", { ascending: false })
         : await db().from("training_exam_records").select("*").eq("account_id", state.account.id).order("submitted_at", { ascending: false });
       const configMap = new Map((configs || []).map(config => [config.exam_id, config]));
+      const instructionMap = new Map((instructionRows || []).map(item => [String(item.key || "").replace("exam_instruction_", ""), item.value || ""]));
       page.innerHTML = `
         ${state.activeExam ? activeExamHtml(configMap.get(state.activeExam.examId)) : ""}
         <div class="grid cols-2">
-          ${exams.map(exam => examCardHtml(configMap.get(exam.id) || exam)).join("")}
+          ${exams.map(exam => {
+            const config = configMap.get(exam.id) || exam;
+            return examCardHtml({ ...config, exam_id: config.exam_id || exam.id, _instruction: instructionMap.get(exam.id) || "" });
+          }).join("")}
         </div>
         <div class="card" style="margin-top:16px;">
           <h3>考试记录</h3>
@@ -2075,6 +2086,7 @@ L2 运营专员自主推广">${escapeHtml(mindMap?.value || "")}</textarea>
 
     function examCardHtml(config) {
       const title = config.title || exams.find(exam => exam.id === config.exam_id)?.title || "";
+      const instruction = String(config._instruction || "").trim();
       return `
         <div class="card">
           <span class="tag orange">理论考试</span>
@@ -2082,6 +2094,7 @@ L2 运营专员自主推广">${escapeHtml(mindMap?.value || "")}</textarea>
           <p>理论考试 - 建议 ${config.minutes || 60} 分钟 - ${config.question_url || config.question_file_data ? "已上传试题" : "未上传试题"}</p>
           ${config.question_file_name ? `<p class="muted">已保存试题文件：${escapeHtml(config.question_file_name)}${config.updated_at ? ` · 更新时间：${formatDate(config.updated_at)}` : ""}</p>` : ""}
           <p>通过线：成绩大于 ${config.pass_score || config.pass || 80} 分</p>
+          ${instruction ? `<div class="notice"><b>考试说明</b><br>${escapeHtml(instruction).replaceAll("\n", "<br>")}</div>` : ""}
           <div class="toolbar">
             ${config.question_url ? `<a class="btn ghost small" href="${escapeHtml(config.question_url)}" target="_blank">当前试题链接</a>` : ""}
             ${config.question_file_data ? `<button class="btn ghost small" onclick="downloadQuestion('${config.exam_id || config.id}')">下载试题原文件</button>` : ""}
@@ -2091,6 +2104,7 @@ L2 运营专员自主推广">${escapeHtml(mindMap?.value || "")}</textarea>
             <div class="field"><label>建议分钟</label><input id="min-${config.exam_id}" type="number" value="${config.minutes || 60}" /></div>
             <div class="field"><label>通过线</label><input id="pass-${config.exam_id}" type="number" value="${config.pass_score || 80}" /></div>
             <div class="field"><label>试题飞书/网页链接</label><input id="qurl-${config.exam_id}" value="${escapeHtml(config.question_url || "")}" /></div>
+            <div class="field"><label>考试说明</label><textarea id="instruction-${config.exam_id}" placeholder="填写各题分数、满分、答题要求等。">${escapeHtml(instruction || defaultExamInstruction)}</textarea></div>
             <div class="field"><label>或上传试题文件</label><input id="qfile-${config.exam_id}" type="file" /></div>
             <p class="muted">试题文件会保存到线上文件仓库，数据库只记录下载地址。</p>
             <p class="muted">选择新文件并保存后，会替换当前保存的试题原文件；不选择新文件时，会保留原文件。</p>
@@ -2141,6 +2155,7 @@ L2 运营专员自主推广">${escapeHtml(mindMap?.value || "")}</textarea>
         const minutes = Number(document.getElementById(`min-${examId}`).value || 60);
         const pass_score = Number(document.getElementById(`pass-${examId}`).value || 80);
         const question_url = document.getElementById(`qurl-${examId}`).value.trim();
+        const instruction = document.getElementById(`instruction-${examId}`)?.value.trim() || "";
         const file = document.getElementById(`qfile-${examId}`).files[0];
         const fileData = file ? await fileToData(file, `exam-questions/${examId}`) : null;
         const original = exams.find(exam => exam.id === examId);
@@ -2158,6 +2173,12 @@ L2 运营专员自主推广">${escapeHtml(mindMap?.value || "")}</textarea>
           updated_at: new Date().toISOString()
         }, { onConflict: "exam_id" });
         if (error) throw error;
+        const { error: instructionError } = await db().from("training_system_settings").upsert({
+          key: `exam_instruction_${examId}`,
+          value: instruction,
+          updated_at: new Date().toISOString()
+        }, { onConflict: "key" });
+        if (instructionError) throw instructionError;
         alert("试题设置已保存。");
         renderPage();
       } catch (error) {
