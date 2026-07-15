@@ -2064,7 +2064,7 @@ L2 运营专员自主推广">${escapeHtml(mindMap?.value || "")}</textarea>
                   <td>${record.score == null ? "待评分" : record.passed ? "已通过" : "未通过"}</td>
                   <td>${answerLinkHtml(record)}</td>
                   <td>${formatDate(record.submitted_at)}</td>
-                  <td>${state.account.role === "admin" ? `<button class="btn blue small" onclick="scoreRecord('${record.id}')">录入成绩</button>` : ""}</td>
+                  <td>${state.account.role === "admin" ? `<button class="btn blue small" onclick="scoreRecord('${record.id}')">录入成绩</button>` : `<button class="btn red small" onclick="deleteExamRecord('${record.id}')">删除</button>`}</td>
                 </tr>`).join("")}
             </tbody>
           </table>` : `<div class="empty">还没有考试记录。</div>`}
@@ -2224,6 +2224,18 @@ L2 运营专员自主推广">${escapeHtml(mindMap?.value || "")}</textarea>
       link.href = data.answer_file_data;
       link.download = data.answer_file_name || "answer-file";
       link.click();
+    }
+
+    async function deleteExamRecord(recordId) {
+      if (!confirm("确定删除这次考试提交吗？删除后主账号将看不到这条记录，你可以重新提交。")) return;
+      const { error } = await db()
+        .from("training_exam_records")
+        .delete()
+        .eq("id", recordId)
+        .eq("account_id", state.account.id);
+      if (error) return alert(`删除失败：${error.message || error}`);
+      alert("已删除这次考试提交，可以重新提交。");
+      renderPage();
     }
 
     async function scoreRecord(recordId) {
