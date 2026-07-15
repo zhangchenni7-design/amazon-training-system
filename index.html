@@ -1837,7 +1837,7 @@ L2 运营专员自主推广">${escapeHtml(mindMap?.value || "")}</textarea>
       if (!submissions.length) return `<div class="empty">${isAdmin ? "还没有新人提交作业。" : "你还没有提交作业。"}</div>`;
       return `
         <table class="table">
-          <thead><tr>${isAdmin ? "<th>新人</th>" : ""}<th>说明</th><th>附件/链接</th><th>成绩</th><th>导师反馈</th><th>提交时间</th>${isAdmin ? "<th>操作</th>" : ""}</tr></thead>
+          <thead><tr>${isAdmin ? "<th>新人</th>" : ""}<th>说明</th><th>附件/链接</th><th>成绩</th><th>导师反馈</th><th>提交时间</th><th>操作</th></tr></thead>
           <tbody>
             ${submissions.map(item => `
               <tr>
@@ -1847,7 +1847,7 @@ L2 运营专员自主推广">${escapeHtml(mindMap?.value || "")}</textarea>
                 <td>${item.score ?? "待评分"}</td>
                 <td>${escapeHtml(item.mentor_note || "-")}</td>
                 <td>${formatDate(item.submitted_at)}</td>
-                ${isAdmin ? `<td><button class="btn blue small" onclick="reviewHomeworkSubmission('${item.id}')">评分/反馈</button></td>` : ""}
+                <td>${isAdmin ? `<button class="btn blue small" onclick="reviewHomeworkSubmission('${item.id}')">评分/反馈</button>` : `<button class="btn red small" onclick="deleteHomeworkSubmission('${item.id}')">删除</button>`}</td>
               </tr>
             `).join("")}
           </tbody>
@@ -1968,6 +1968,18 @@ L2 运营专员自主推广">${escapeHtml(mindMap?.value || "")}</textarea>
         reviewed_at: new Date().toISOString()
       }).eq("id", submissionId);
       if (error) return alert(error.message || error);
+      renderPage();
+    }
+
+    async function deleteHomeworkSubmission(submissionId) {
+      if (!confirm("确定删除这次作业提交吗？删除后主账号将看不到这条记录，你可以重新提交。")) return;
+      const { error } = await db()
+        .from("training_course_homework_submissions")
+        .delete()
+        .eq("id", submissionId)
+        .eq("account_id", state.account.id);
+      if (error) return alert(`删除失败：${error.message || error}`);
+      alert("已删除这次提交，可以重新提交作业。");
       renderPage();
     }
 
